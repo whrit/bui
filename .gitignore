@@ -1,0 +1,11 @@
+.DS_Store
+.idea/
+.vscode/
+dist/
+bin/
+*.log
+
+# Go
+*.test
+*.out
+/vendor/
