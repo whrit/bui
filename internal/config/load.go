@@ -35,7 +35,7 @@ func LoadOrInit() (Config, string, error) {
 		if err != nil {
 			return Config{}, "", fmt.Errorf("create config: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		enc := toml.NewEncoder(f)
 		enc.Indent = ""

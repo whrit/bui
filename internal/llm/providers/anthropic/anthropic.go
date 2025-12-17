@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"bui/internal/config"
-	"bui/internal/llm"
+	"bui/internal/llm/core"
 )
 
 type Provider struct {
@@ -55,8 +55,8 @@ type event struct {
 	} `json:"delta"`
 }
 
-func (p *Provider) Stream(ctx context.Context, pr llm.Prompt) (<-chan llm.Token, <-chan error) {
-	out := make(chan llm.Token, 64)
+func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Token, <-chan error) {
+	out := make(chan core.Token, 64)
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -93,7 +93,7 @@ func (p *Provider) Stream(ctx context.Context, pr llm.Prompt) (<-chan llm.Token,
 			errCh <- err
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode >= 400 {
 			buf := new(bytes.Buffer)
 			_, _ = buf.ReadFrom(resp.Body)
@@ -123,7 +123,7 @@ func (p *Provider) Stream(ctx context.Context, pr llm.Prompt) (<-chan llm.Token,
 			}
 			if ev.Type == "content_block_delta" && ev.Delta.Text != "" {
 				select {
-				case out <- llm.Token{Text: ev.Delta.Text}:
+				case out <- core.Token{Text: ev.Delta.Text}:
 				case <-ctx.Done():
 					errCh <- ctx.Err()
 					return

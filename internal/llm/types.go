@@ -1,19 +1,14 @@
+// Package llm provides LLM integration for bui.
 package llm
 
-import "context"
+import (
+	"bui/internal/llm/core"
+)
 
-type Prompt struct {
-	System  string
-	User    string
-	MaxTokens int
-	Temperature float64
-}
-
-type Token struct {
-	Text string
-}
-
-type Provider interface {
-	Name() string
-	Stream(ctx context.Context, p Prompt) (<-chan Token, <-chan error)
-}
+// Re-export types from core package for convenience.
+// This allows consumers to import just "bui/internal/llm" instead of "bui/internal/llm/core".
+type (
+	Prompt   = core.Prompt
+	Token    = core.Token
+	Provider = core.Provider
+)

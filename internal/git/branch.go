@@ -293,8 +293,8 @@ func (r *Repo) GetBranchCommitsBehindAhead(branch string) (behind, ahead int, er
 		return 0, 0, fmt.Errorf("unexpected rev-list output: %q", string(output))
 	}
 
-	fmt.Sscanf(parts[0], "%d", &behind)
-	fmt.Sscanf(parts[1], "%d", &ahead)
+	_, _ = fmt.Sscanf(parts[0], "%d", &behind)
+	_, _ = fmt.Sscanf(parts[1], "%d", &ahead)
 
 	return behind, ahead, nil
 }

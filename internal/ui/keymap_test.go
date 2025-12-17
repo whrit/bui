@@ -433,11 +433,6 @@ func TestBindingFromConfig(t *testing.T) {
 func TestKeyMatchesFunction(t *testing.T) {
 	km := DefaultKeyMap()
 
-	// Create a mock key message
-	type mockKeyMsg struct {
-		keys string
-	}
-
 	// Test that key.Matches works correctly with our bindings
 	// This is more of an integration test with bubbles/key
 

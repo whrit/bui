@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"bui/internal/config"
-	"bui/internal/llm"
+	"bui/internal/llm/core"
 )
 
-// Local provider targets an Ollama-compatible streaming endpoint by default.
+// Provider targets an Ollama-compatible streaming endpoint by default.
 // Config: [llm.local] base_url = "http://localhost:11434"
 type Provider struct {
 	baseURL     string
@@ -49,8 +49,8 @@ type respLine struct {
 	Error    string `json:"error,omitempty"`
 }
 
-func (p *Provider) Stream(ctx context.Context, pr llm.Prompt) (<-chan llm.Token, <-chan error) {
-	out := make(chan llm.Token, 64)
+func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Token, <-chan error) {
+	out := make(chan core.Token, 64)
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -62,7 +62,7 @@ func (p *Provider) Stream(ctx context.Context, pr llm.Prompt) (<-chan llm.Token,
 			return
 		}
 
-		// Local models often don’t have a separate system field, so we prepend it.
+		// Local models often don't have a separate system field, so we prepend it.
 		combined := pr.System + "\n\n" + pr.User
 
 		b, _ := json.Marshal(reqBody{
@@ -89,7 +89,7 @@ func (p *Provider) Stream(ctx context.Context, pr llm.Prompt) (<-chan llm.Token,
 			errCh <- err
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode >= 400 {
 			buf := new(bytes.Buffer)
 			_, _ = buf.ReadFrom(resp.Body)
@@ -115,7 +115,7 @@ func (p *Provider) Stream(ctx context.Context, pr llm.Prompt) (<-chan llm.Token,
 			}
 			if r.Response != "" {
 				select {
-				case out <- llm.Token{Text: r.Response}:
+				case out <- core.Token{Text: r.Response}:
 				case <-ctx.Done():
 					errCh <- ctx.Err()
 					return
