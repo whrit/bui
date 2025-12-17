@@ -1,14 +1,20 @@
 // Package root implements the root/shell model for the bui application.
-// It manages screen navigation between Dashboard, PR Detail, and Diff Viewer screens.
+// It manages screen navigation between Dashboard, PR Detail, Diff Viewer,
+// Composer, Create PR, and Review screens.
 package root
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
+	"bui/internal/app/createpr"
 	"bui/internal/app/dashboard"
 	"bui/internal/app/diffview"
 	"bui/internal/app/prdetail"
+	"bui/internal/app/review"
 	"bui/internal/config"
+	"bui/internal/gh"
+	"bui/internal/git"
+	"bui/internal/llm"
 	"bui/internal/ui"
 )
 
@@ -26,6 +32,10 @@ const (
 	ScreenPRDetail
 	// ScreenDiffView shows the diff for a PR.
 	ScreenDiffView
+	// ScreenCreatePR shows the create PR wizard.
+	ScreenCreatePR
+	// ScreenReview shows the review submission screen.
+	ScreenReview
 )
 
 // String returns a string representation of the screen.
@@ -37,6 +47,10 @@ func (s Screen) String() string {
 		return "prdetail"
 	case ScreenDiffView:
 		return "diffview"
+	case ScreenCreatePR:
+		return "createpr"
+	case ScreenReview:
+		return "review"
 	default:
 		return "unknown"
 	}
@@ -59,6 +73,13 @@ type Model struct {
 	dashboard dashboard.Model
 	prdetail  prdetail.Model
 	diffview  diffview.Model
+	createpr  createpr.Model
+	review    review.Model
+
+	// Dependencies
+	ghClient    *gh.Client
+	gitRepo     *git.Repo
+	llmProvider llm.Provider
 
 	// Dimensions
 	width, height int
@@ -78,14 +99,27 @@ func New(cfg config.Config, cfgPath string) Model {
 	// Initialize dashboard as the starting screen
 	dash := dashboard.New(cfg)
 
+	// Initialize dependencies
+	ghClient := gh.New()
+	gitRepo := git.New()
+
+	// Initialize LLM provider if configured
+	var llmProvider llm.Provider
+	if cfg.LLM.Provider != "" {
+		llmProvider, _ = llm.NewProvider(cfg)
+	}
+
 	return Model{
-		cfg:       cfg,
-		cfgPath:   cfgPath,
-		screen:    ScreenDashboard,
-		dashboard: dash,
-		palette:   pal,
-		styles:    styles,
-		keymap:    keymap,
+		cfg:         cfg,
+		cfgPath:     cfgPath,
+		screen:      ScreenDashboard,
+		dashboard:   dash,
+		ghClient:    ghClient,
+		gitRepo:     gitRepo,
+		llmProvider: llmProvider,
+		palette:     pal,
+		styles:      styles,
+		keymap:      keymap,
 	}
 }
 
@@ -119,8 +153,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.prdetail.Init()
 
 	case dashboard.CreatePRMsg:
-		// TODO: Navigate to create PR wizard in Phase 3
-		return m, nil
+		// Navigate to create PR wizard
+		m.screen = ScreenCreatePR
+		m.createpr = createpr.New(m.cfg, m.ghClient, m.gitRepo, m.llmProvider)
+		m.createpr.SetSize(m.width, m.height)
+		return m, m.createpr.Init()
 
 	// Navigation messages from PR Detail
 	case prdetail.BackToDashboardMsg:
@@ -140,6 +177,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// PR detail should still have the PR loaded, so just switch back
 		// If we wanted to ensure the PR is reloaded, we would reinitialize here
 		return m, nil
+
+	// Navigation messages from Create PR
+	case createpr.BackToDashboardMsg:
+		m.screen = ScreenDashboard
+		// Dashboard maintains its state; no need to reinitialize
+		return m, nil
+
+	case createpr.PRCreatedMsg:
+		// Navigate to PR detail for the newly created PR
+		m.screen = ScreenPRDetail
+		m.prdetail = prdetail.New(m.cfg, msg.PR.Number)
+		m.prdetail.SetSize(m.width, m.height)
+		return m, m.prdetail.Init()
+
+	// Navigation messages from PR Detail to Review
+	case prdetail.StartReviewMsg:
+		// Navigate to review screen
+		m.screen = ScreenReview
+		m.review = review.New(m.cfg, m.ghClient, m.llmProvider, msg.PRNumber, msg.PRTitle, msg.Diff)
+		m.review.SetSize(m.width, m.height)
+		return m, m.review.Init()
+
+	// Navigation messages from Review
+	case review.BackToPRDetailMsg:
+		m.screen = ScreenPRDetail
+		// PR detail should still have the PR loaded, so just switch back
+		return m, nil
+
+	case review.ReviewSubmittedMsg:
+		// Navigate back to PR detail and refresh
+		m.screen = ScreenPRDetail
+		// Reinitialize to refresh the PR data after review submission
+		m.prdetail = prdetail.New(m.cfg, m.prdetail.PRNumber())
+		m.prdetail.SetSize(m.width, m.height)
+		return m, m.prdetail.Init()
 	}
 
 	// Route update to active screen
@@ -161,6 +233,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		newModel, cmd = m.diffview.Update(msg)
 		m.diffview = newModel.(diffview.Model)
 		cmds = append(cmds, cmd)
+
+	case ScreenCreatePR:
+		var newModel tea.Model
+		newModel, cmd = m.createpr.Update(msg)
+		m.createpr = newModel.(createpr.Model)
+		cmds = append(cmds, cmd)
+
+	case ScreenReview:
+		var newModel tea.Model
+		newModel, cmd = m.review.Update(msg)
+		m.review = newModel.(review.Model)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -175,6 +259,10 @@ func (m Model) View() string {
 		return m.prdetail.View()
 	case ScreenDiffView:
 		return m.diffview.View()
+	case ScreenCreatePR:
+		return m.createpr.View()
+	case ScreenReview:
+		return m.review.View()
 	default:
 		return "Unknown screen"
 	}
@@ -219,6 +307,16 @@ func (m Model) DiffView() diffview.Model {
 	return m.diffview
 }
 
+// CreatePR returns the create PR wizard model. Useful for testing.
+func (m Model) CreatePR() createpr.Model {
+	return m.createpr
+}
+
+// Review returns the review model. Useful for testing.
+func (m Model) Review() review.Model {
+	return m.review
+}
+
 // =============================================================================
 // Internal Helpers
 // =============================================================================
@@ -234,5 +332,9 @@ func (m *Model) updateScreenSizes() {
 		m.prdetail.SetSize(m.width, m.height)
 	case ScreenDiffView:
 		m.diffview.SetSize(m.width, m.height)
+	case ScreenCreatePR:
+		m.createpr.SetSize(m.width, m.height)
+	case ScreenReview:
+		m.review.SetSize(m.width, m.height)
 	}
 }

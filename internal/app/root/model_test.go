@@ -3,9 +3,11 @@ package root
 import (
 	"testing"
 
+	"bui/internal/app/createpr"
 	"bui/internal/app/dashboard"
 	"bui/internal/app/diffview"
 	"bui/internal/app/prdetail"
+	"bui/internal/app/review"
 	"bui/internal/config"
 	"bui/internal/gh"
 
@@ -60,6 +62,8 @@ func TestScreen_String(t *testing.T) {
 		{name: "dashboard", screen: ScreenDashboard, want: "dashboard"},
 		{name: "prdetail", screen: ScreenPRDetail, want: "prdetail"},
 		{name: "diffview", screen: ScreenDiffView, want: "diffview"},
+		{name: "createpr", screen: ScreenCreatePR, want: "createpr"},
+		{name: "review", screen: ScreenReview, want: "review"},
 		{name: "unknown", screen: Screen(99), want: "unknown"},
 	}
 
@@ -264,7 +268,7 @@ func TestModel_Update_Quit_CtrlC(t *testing.T) {
 }
 
 func TestModel_Update_Quit_FromAnyScreen(t *testing.T) {
-	screens := []Screen{ScreenDashboard, ScreenPRDetail, ScreenDiffView}
+	screens := []Screen{ScreenDashboard, ScreenPRDetail, ScreenDiffView, ScreenCreatePR, ScreenReview}
 
 	for _, screen := range screens {
 		t.Run(screen.String(), func(t *testing.T) {
@@ -278,6 +282,10 @@ func TestModel_Update_Quit_FromAnyScreen(t *testing.T) {
 				model.prdetail = prdetail.New(cfg, 1)
 			case ScreenDiffView:
 				model.diffview = diffview.New(cfg, 1)
+			case ScreenCreatePR:
+				model.createpr = createpr.New(cfg, nil, nil, nil)
+			case ScreenReview:
+				model.review = review.New(cfg, nil, nil, 1, "Test PR", "diff")
 			}
 
 			msg := tea.KeyMsg{Type: tea.KeyCtrlC}
@@ -427,26 +435,199 @@ func TestModel_Update_BackToPRDetailMsg(t *testing.T) {
 }
 
 // =============================================================================
-// Navigation Tests: CreatePRMsg (placeholder)
+// Navigation Tests: Dashboard -> Create PR
 // =============================================================================
 
 func TestModel_Update_CreatePRMsg(t *testing.T) {
 	cfg := testConfig()
 	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	msg := dashboard.CreatePRMsg{}
 
 	newModel, cmd := model.Update(msg)
 	m := newModel.(Model)
 
-	// Should stay on dashboard (TODO: will navigate to create PR wizard in Phase 3)
-	if m.screen != ScreenDashboard {
-		t.Errorf("Update(CreatePRMsg) screen = %v, want %v", m.screen, ScreenDashboard)
+	// Should navigate to create PR screen
+	if m.screen != ScreenCreatePR {
+		t.Errorf("Update(CreatePRMsg) screen = %v, want %v", m.screen, ScreenCreatePR)
 	}
 
-	// Should return nil for now (placeholder)
+	// Should return a command to initialize the create PR screen
+	if cmd == nil {
+		t.Error("Update(CreatePRMsg) returned nil cmd, want Init command")
+	}
+}
+
+// =============================================================================
+// Navigation Tests: Create PR -> Dashboard
+// =============================================================================
+
+func TestModel_Update_CreatePR_BackToDashboardMsg(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Navigate to create PR first
+	newModel, _ := model.Update(dashboard.CreatePRMsg{})
+	m := newModel.(Model)
+
+	if m.screen != ScreenCreatePR {
+		t.Fatalf("Setup failed: screen = %v, want %v", m.screen, ScreenCreatePR)
+	}
+
+	// Navigate back to dashboard
+	msg := createpr.BackToDashboardMsg{}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	if m.screen != ScreenDashboard {
+		t.Errorf("Update(createpr.BackToDashboardMsg) screen = %v, want %v", m.screen, ScreenDashboard)
+	}
+
+	// Should not return a command (dashboard state is preserved)
 	if cmd != nil {
-		t.Error("Update(CreatePRMsg) returned non-nil cmd, want nil (placeholder)")
+		t.Error("Update(createpr.BackToDashboardMsg) returned non-nil cmd, want nil")
+	}
+}
+
+// =============================================================================
+// Navigation Tests: Create PR -> PR Detail (after creation)
+// =============================================================================
+
+func TestModel_Update_PRCreatedMsg(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Navigate to create PR first
+	newModel, _ := model.Update(dashboard.CreatePRMsg{})
+	m := newModel.(Model)
+
+	// Simulate PR creation
+	newPR := &gh.PR{Number: 123, Title: "New PR"}
+	msg := createpr.PRCreatedMsg{PR: newPR}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	if m.screen != ScreenPRDetail {
+		t.Errorf("Update(PRCreatedMsg) screen = %v, want %v", m.screen, ScreenPRDetail)
+	}
+
+	if m.prdetail.PRNumber() != 123 {
+		t.Errorf("Update(PRCreatedMsg) prdetail.PRNumber() = %d, want %d", m.prdetail.PRNumber(), 123)
+	}
+
+	// Should return a command to initialize the PR detail screen
+	if cmd == nil {
+		t.Error("Update(PRCreatedMsg) returned nil cmd, want Init command")
+	}
+}
+
+// =============================================================================
+// Navigation Tests: PR Detail -> Review
+// =============================================================================
+
+func TestModel_Update_StartReviewMsg(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Navigate to PR detail first
+	pr := testPR()
+	newModel, _ := model.Update(dashboard.OpenPRDetailMsg{PR: pr})
+	m := newModel.(Model)
+
+	// Navigate to review
+	msg := prdetail.StartReviewMsg{
+		PRNumber: pr.Number,
+		PRTitle:  pr.Title,
+		Diff:     "diff content",
+	}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	if m.screen != ScreenReview {
+		t.Errorf("Update(StartReviewMsg) screen = %v, want %v", m.screen, ScreenReview)
+	}
+
+	if m.review.PRNumber() != pr.Number {
+		t.Errorf("Update(StartReviewMsg) review.PRNumber() = %d, want %d", m.review.PRNumber(), pr.Number)
+	}
+
+	// Should return a command to initialize the review screen
+	if cmd == nil {
+		t.Error("Update(StartReviewMsg) returned nil cmd, want Init command")
+	}
+}
+
+// =============================================================================
+// Navigation Tests: Review -> PR Detail
+// =============================================================================
+
+func TestModel_Update_Review_BackToPRDetailMsg(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Navigate to PR detail first
+	pr := testPR()
+	newModel, _ := model.Update(dashboard.OpenPRDetailMsg{PR: pr})
+	m := newModel.(Model)
+
+	// Navigate to review
+	newModel, _ = m.Update(prdetail.StartReviewMsg{PRNumber: pr.Number, PRTitle: pr.Title, Diff: "diff"})
+	m = newModel.(Model)
+
+	if m.screen != ScreenReview {
+		t.Fatalf("Setup failed: screen = %v, want %v", m.screen, ScreenReview)
+	}
+
+	// Navigate back to PR detail
+	msg := review.BackToPRDetailMsg{PRNumber: pr.Number}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	if m.screen != ScreenPRDetail {
+		t.Errorf("Update(review.BackToPRDetailMsg) screen = %v, want %v", m.screen, ScreenPRDetail)
+	}
+
+	// Should not return a command (PR detail state is preserved)
+	if cmd != nil {
+		t.Error("Update(review.BackToPRDetailMsg) returned non-nil cmd, want nil")
+	}
+}
+
+func TestModel_Update_ReviewSubmittedMsg(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Navigate to PR detail first
+	pr := testPR()
+	newModel, _ := model.Update(dashboard.OpenPRDetailMsg{PR: pr})
+	m := newModel.(Model)
+
+	// Navigate to review
+	newModel, _ = m.Update(prdetail.StartReviewMsg{PRNumber: pr.Number, PRTitle: pr.Title, Diff: "diff"})
+	m = newModel.(Model)
+
+	// Submit review
+	msg := review.ReviewSubmittedMsg{}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	if m.screen != ScreenPRDetail {
+		t.Errorf("Update(ReviewSubmittedMsg) screen = %v, want %v", m.screen, ScreenPRDetail)
+	}
+
+	// Should return a command to refresh PR detail
+	if cmd == nil {
+		t.Error("Update(ReviewSubmittedMsg) returned nil cmd, want Init command")
 	}
 }
 
@@ -512,6 +693,46 @@ func TestModel_Update_RoutesToDiffView(t *testing.T) {
 	}
 }
 
+func TestModel_Update_RoutesToCreatePR(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Navigate to create PR
+	newModel, _ := model.Update(dashboard.CreatePRMsg{})
+	m := newModel.(Model)
+
+	// Send a key that create PR should handle
+	msg := tea.KeyMsg{Type: tea.KeyDown}
+
+	newModel, _ = m.Update(msg)
+	m = newModel.(Model)
+
+	// Verify we're still on create PR
+	if m.screen != ScreenCreatePR {
+		t.Errorf("Message routing changed screen unexpectedly: got %v", m.screen)
+	}
+}
+
+func TestModel_Update_RoutesToReview(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Navigate to review
+	newModel, _ := model.Update(prdetail.StartReviewMsg{PRNumber: 42, PRTitle: "Test", Diff: "diff"})
+	m := newModel.(Model)
+
+	// Send a key that review should handle
+	msg := tea.KeyMsg{Type: tea.KeyDown}
+
+	newModel, _ = m.Update(msg)
+	m = newModel.(Model)
+
+	// Verify we're still on review
+	if m.screen != ScreenReview {
+		t.Errorf("Message routing changed screen unexpectedly: got %v", m.screen)
+	}
+}
+
 // =============================================================================
 // View Tests
 // =============================================================================
@@ -568,6 +789,44 @@ func TestModel_View_DiffView(t *testing.T) {
 
 	if view == "" {
 		t.Error("View() on DiffView returned empty string")
+	}
+}
+
+func TestModel_View_CreatePR(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Navigate to create PR
+	newModel, _ := model.Update(dashboard.CreatePRMsg{})
+	m := newModel.(Model)
+
+	// Set size
+	newModel, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = newModel.(Model)
+
+	view := m.View()
+
+	if view == "" {
+		t.Error("View() on CreatePR returned empty string")
+	}
+}
+
+func TestModel_View_Review(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Navigate to review
+	newModel, _ := model.Update(prdetail.StartReviewMsg{PRNumber: 42, PRTitle: "Test", Diff: "diff"})
+	m := newModel.(Model)
+
+	// Set size
+	newModel, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = newModel.(Model)
+
+	view := m.View()
+
+	if view == "" {
+		t.Error("View() on Review returned empty string")
 	}
 }
 

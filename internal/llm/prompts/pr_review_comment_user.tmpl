@@ -1,0 +1,17 @@
+Review Type: {{.ReviewType}}
+PR Title: {{.PRTitle}}
+PR Number: #{{.PRNumber}}
+
+{{if .Diff}}
+Diff context (truncated if large):
+```
+{{.Diff}}
+```
+{{end}}
+
+{{if .ExistingComment}}
+User's draft (refine this):
+{{.ExistingComment}}
+{{end}}
+
+Please write a {{.ReviewType}} review comment for this PR.

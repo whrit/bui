@@ -99,6 +99,13 @@ type ViewDiffMsg struct {
 	PRNumber int
 }
 
+// StartReviewMsg signals to navigate to the review screen.
+type StartReviewMsg struct {
+	PRNumber int
+	PRTitle  string
+	Diff     string
+}
+
 // OpenInBrowserMsg signals to open a URL in the browser.
 type OpenInBrowserMsg struct {
 	URL string
@@ -205,5 +212,12 @@ func backToDashboard() tea.Cmd {
 func viewDiff(prNumber int) tea.Cmd {
 	return func() tea.Msg {
 		return ViewDiffMsg{PRNumber: prNumber}
+	}
+}
+
+// startReview creates a command that signals to start a review.
+func startReview(prNumber int, prTitle string, diff string) tea.Cmd {
+	return func() tea.Msg {
+		return StartReviewMsg{PRNumber: prNumber, PRTitle: prTitle, Diff: diff}
 	}
 }

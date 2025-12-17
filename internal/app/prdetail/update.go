@@ -451,6 +451,13 @@ func (m Model) handleReadyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	// Start review (write review)
+	case msg.String() == "w":
+		if m.pr != nil && m.pr.State == "OPEN" {
+			return m, startReview(m.prNumber, m.pr.Title, m.diff)
+		}
+		return m, nil
+
 	// Refresh
 	case key.Matches(msg, m.keymap.Refresh):
 		m.state = StateLoading
