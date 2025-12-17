@@ -1,14 +1,19 @@
 // Package root implements the root/shell model for the bui application.
 // It manages screen navigation between Dashboard, PR Detail, Diff Viewer,
-// Composer, Create PR, and Review screens.
+// Composer, Create PR, Review, and Help screens.
 package root
 
 import (
+	"fmt"
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"bui/internal/app/createpr"
 	"bui/internal/app/dashboard"
 	"bui/internal/app/diffview"
+	"bui/internal/app/help"
 	"bui/internal/app/prdetail"
 	"bui/internal/app/review"
 	"bui/internal/config"
@@ -36,6 +41,8 @@ const (
 	ScreenCreatePR
 	// ScreenReview shows the review submission screen.
 	ScreenReview
+	// ScreenHelp shows the help/keybindings screen.
+	ScreenHelp
 )
 
 // String returns a string representation of the screen.
@@ -51,10 +58,32 @@ func (s Screen) String() string {
 		return "createpr"
 	case ScreenReview:
 		return "review"
+	case ScreenHelp:
+		return "help"
 	default:
 		return "unknown"
 	}
 }
+
+// =============================================================================
+// Toast Message Types
+// =============================================================================
+
+// ShowToastMsg displays a toast notification.
+type ShowToastMsg struct {
+	Message string
+	Type    ui.ToastType
+}
+
+// ClearToastMsg clears the current toast.
+type ClearToastMsg struct{}
+
+// ToastTickMsg is sent for toast auto-dismiss countdown.
+type ToastTickMsg struct{}
+
+// toastDuration is the number of ticks before a toast auto-dismisses.
+// At 100ms per tick, 30 ticks = 3 seconds.
+const toastDuration = 30
 
 // =============================================================================
 // Model
@@ -67,7 +96,8 @@ type Model struct {
 	cfgPath string
 
 	// Screen state
-	screen Screen
+	screen         Screen
+	previousScreen Screen // To return to after help closes
 
 	// Screen models
 	dashboard dashboard.Model
@@ -75,6 +105,7 @@ type Model struct {
 	diffview  diffview.Model
 	createpr  createpr.Model
 	review    review.Model
+	help      help.Model
 
 	// Dependencies
 	ghClient    *gh.Client
@@ -83,6 +114,10 @@ type Model struct {
 
 	// Dimensions
 	width, height int
+
+	// Toast state
+	toast      *ui.Toast
+	toastTimer int // Countdown ticks until toast clears
 
 	// Styling
 	palette ui.Palette
@@ -145,7 +180,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+		// Global help handler - open help from any screen (except help itself)
+		if msg.String() == m.cfg.Keys.Help && m.screen != ScreenHelp {
+			m.previousScreen = m.screen
+			m.screen = ScreenHelp
+			m.help = help.New(m.cfg, screenToHelpContext(m.previousScreen))
+			m.help.SetSize(m.width, m.height)
+			return m, m.help.Init()
+		}
+
+	// ==========================================================================
+	// Toast Messages
+	// ==========================================================================
+
+	case ShowToastMsg:
+		m.toast = ui.NewToast(m.palette, m.styles)
+		switch msg.Type {
+		case ui.ToastSuccess:
+			m.toast.Success(msg.Message)
+		case ui.ToastError:
+			m.toast.Error(msg.Message)
+		case ui.ToastWarning:
+			m.toast.Warning(msg.Message)
+		default:
+			m.toast.Info(msg.Message)
+		}
+		m.toastTimer = toastDuration
+		return m, toastTick()
+
+	case ToastTickMsg:
+		if m.toastTimer > 0 {
+			m.toastTimer--
+			if m.toastTimer == 0 {
+				m.toast = nil
+				return m, nil
+			}
+			return m, toastTick()
+		}
+		return m, nil
+
+	case ClearToastMsg:
+		m.toast = nil
+		m.toastTimer = 0
+		return m, nil
+
+	// ==========================================================================
+	// Help Screen Navigation
+	// ==========================================================================
+
+	case help.CloseHelpMsg:
+		// Return to the previous screen
+		m.screen = m.previousScreen
+		return m, nil
+
+	// ==========================================================================
 	// Navigation messages from Dashboard
+	// ==========================================================================
+
 	case dashboard.OpenPRDetailMsg:
 		m.screen = ScreenPRDetail
 		m.prdetail = prdetail.New(m.cfg, msg.PR.Number)
@@ -159,7 +250,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createpr.SetSize(m.width, m.height)
 		return m, m.createpr.Init()
 
+	// ==========================================================================
 	// Navigation messages from PR Detail
+	// ==========================================================================
+
 	case prdetail.BackToDashboardMsg:
 		m.screen = ScreenDashboard
 		// Dashboard maintains its state; no need to reinitialize
@@ -171,14 +265,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffview.SetSize(m.width, m.height)
 		return m, m.diffview.Init()
 
+	case prdetail.MergeDoneMsg:
+		// Show success toast when PR is merged
+		return m, showToast("PR merged successfully", ui.ToastSuccess)
+
+	case prdetail.MergeErrorMsg:
+		// Show error toast when merge fails
+		return m, showToast(fmt.Sprintf("Merge failed: %v", msg.Err), ui.ToastError)
+
+	// ==========================================================================
 	// Navigation messages from Diff View
+	// ==========================================================================
+
 	case diffview.BackToPRDetailMsg:
 		m.screen = ScreenPRDetail
 		// PR detail should still have the PR loaded, so just switch back
 		// If we wanted to ensure the PR is reloaded, we would reinitialize here
 		return m, nil
 
+	// ==========================================================================
 	// Navigation messages from Create PR
+	// ==========================================================================
+
 	case createpr.BackToDashboardMsg:
 		m.screen = ScreenDashboard
 		// Dashboard maintains its state; no need to reinitialize
@@ -189,9 +297,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = ScreenPRDetail
 		m.prdetail = prdetail.New(m.cfg, msg.PR.Number)
 		m.prdetail.SetSize(m.width, m.height)
-		return m, m.prdetail.Init()
+		// Show success toast and initialize PR detail
+		return m, tea.Batch(
+			m.prdetail.Init(),
+			showToast(fmt.Sprintf("PR #%d created", msg.PR.Number), ui.ToastSuccess),
+		)
 
+	case createpr.PRCreateErrorMsg:
+		// Show error toast when PR creation fails
+		return m, showToast(fmt.Sprintf("Failed to create PR: %v", msg.Err), ui.ToastError)
+
+	// ==========================================================================
 	// Navigation messages from PR Detail to Review
+	// ==========================================================================
+
 	case prdetail.StartReviewMsg:
 		// Navigate to review screen
 		m.screen = ScreenReview
@@ -199,7 +318,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.review.SetSize(m.width, m.height)
 		return m, m.review.Init()
 
+	// ==========================================================================
 	// Navigation messages from Review
+	// ==========================================================================
+
 	case review.BackToPRDetailMsg:
 		m.screen = ScreenPRDetail
 		// PR detail should still have the PR loaded, so just switch back
@@ -211,7 +333,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reinitialize to refresh the PR data after review submission
 		m.prdetail = prdetail.New(m.cfg, m.prdetail.PRNumber())
 		m.prdetail.SetSize(m.width, m.height)
-		return m, m.prdetail.Init()
+		// Show success toast and initialize PR detail
+		return m, tea.Batch(
+			m.prdetail.Init(),
+			showToast("Review submitted", ui.ToastSuccess),
+		)
 	}
 
 	// Route update to active screen
@@ -245,6 +371,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		newModel, cmd = m.review.Update(msg)
 		m.review = newModel.(review.Model)
 		cmds = append(cmds, cmd)
+
+	case ScreenHelp:
+		var newModel tea.Model
+		newModel, cmd = m.help.Update(msg)
+		m.help = newModel.(help.Model)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -252,20 +384,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model. It renders the active screen.
 func (m Model) View() string {
+	var view string
+
+	// Render active screen
 	switch m.screen {
 	case ScreenDashboard:
-		return m.dashboard.View()
+		view = m.dashboard.View()
 	case ScreenPRDetail:
-		return m.prdetail.View()
+		view = m.prdetail.View()
 	case ScreenDiffView:
-		return m.diffview.View()
+		view = m.diffview.View()
 	case ScreenCreatePR:
-		return m.createpr.View()
+		view = m.createpr.View()
 	case ScreenReview:
-		return m.review.View()
+		view = m.review.View()
+	case ScreenHelp:
+		view = m.help.View()
 	default:
-		return "Unknown screen"
+		view = "Unknown screen"
 	}
+
+	// Overlay toast if present
+	if m.toast != nil && !m.toast.IsEmpty() {
+		toastView := m.toast.SetWidth(m.width - 4).Render()
+		// Position toast at the bottom center of the screen
+		view = lipgloss.JoinVertical(lipgloss.Center, view, toastView)
+	}
+
+	return view
 }
 
 // =============================================================================
@@ -317,6 +463,27 @@ func (m Model) Review() review.Model {
 	return m.review
 }
 
+// Help returns the help model. Useful for testing.
+func (m Model) Help() help.Model {
+	return m.help
+}
+
+// PreviousScreen returns the screen that was active before opening help.
+// Useful for testing.
+func (m Model) PreviousScreen() Screen {
+	return m.previousScreen
+}
+
+// Toast returns the current toast. Useful for testing.
+func (m Model) Toast() *ui.Toast {
+	return m.toast
+}
+
+// ToastTimer returns the current toast countdown timer. Useful for testing.
+func (m Model) ToastTimer() int {
+	return m.toastTimer
+}
+
 // =============================================================================
 // Internal Helpers
 // =============================================================================
@@ -336,5 +503,39 @@ func (m *Model) updateScreenSizes() {
 		m.createpr.SetSize(m.width, m.height)
 	case ScreenReview:
 		m.review.SetSize(m.width, m.height)
+	case ScreenHelp:
+		m.help.SetSize(m.width, m.height)
 	}
+}
+
+// screenToHelpContext maps a screen to its corresponding help context.
+func screenToHelpContext(s Screen) help.HelpContext {
+	switch s {
+	case ScreenDashboard:
+		return help.HelpContextDashboard
+	case ScreenPRDetail:
+		return help.HelpContextPRDetail
+	case ScreenDiffView:
+		return help.HelpContextDiffView
+	case ScreenCreatePR:
+		return help.HelpContextCreatePR
+	case ScreenReview:
+		return help.HelpContextReview
+	default:
+		return help.HelpContextGlobal
+	}
+}
+
+// showToast creates a command that displays a toast notification.
+func showToast(msg string, toastType ui.ToastType) tea.Cmd {
+	return func() tea.Msg {
+		return ShowToastMsg{Message: msg, Type: toastType}
+	}
+}
+
+// toastTick creates a command that sends a tick for toast countdown.
+func toastTick() tea.Cmd {
+	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+		return ToastTickMsg{}
+	})
 }

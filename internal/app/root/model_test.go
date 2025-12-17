@@ -1,15 +1,18 @@
 package root
 
 import (
+	"fmt"
 	"testing"
 
 	"bui/internal/app/createpr"
 	"bui/internal/app/dashboard"
 	"bui/internal/app/diffview"
+	"bui/internal/app/help"
 	"bui/internal/app/prdetail"
 	"bui/internal/app/review"
 	"bui/internal/config"
 	"bui/internal/gh"
+	"bui/internal/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -970,4 +973,550 @@ func TestModel_Update_ZeroDimensions(t *testing.T) {
 
 	// View should not panic
 	_ = m.View()
+}
+
+// =============================================================================
+// Screen String Tests (including new ScreenHelp)
+// =============================================================================
+
+func TestScreen_String_Help(t *testing.T) {
+	if got := ScreenHelp.String(); got != "help" {
+		t.Errorf("ScreenHelp.String() = %q, want %q", got, "help")
+	}
+}
+
+// =============================================================================
+// Help Screen Navigation Tests
+// =============================================================================
+
+func TestModel_Update_HelpKey_OpensHelpScreen(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Press '?' to open help from dashboard
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}
+
+	newModel, _ := model.Update(msg)
+	m := newModel.(Model)
+
+	if m.screen != ScreenHelp {
+		t.Errorf("Update('?') screen = %v, want %v", m.screen, ScreenHelp)
+	}
+
+	if m.previousScreen != ScreenDashboard {
+		t.Errorf("Update('?') previousScreen = %v, want %v", m.previousScreen, ScreenDashboard)
+	}
+
+	// The help screen's Init() returns nil, so we don't check for cmd
+	// Just verify the screen transition happened correctly
+}
+
+func TestModel_Update_HelpKey_FromAnyScreen(t *testing.T) {
+	screens := []Screen{ScreenDashboard, ScreenPRDetail, ScreenDiffView, ScreenCreatePR, ScreenReview}
+
+	for _, screen := range screens {
+		t.Run(screen.String(), func(t *testing.T) {
+			cfg := testConfig()
+			model := New(cfg, "")
+			model.SetScreen(screen)
+
+			// Need to initialize the screen models for non-dashboard screens
+			switch screen {
+			case ScreenPRDetail:
+				model.prdetail = prdetail.New(cfg, 1)
+			case ScreenDiffView:
+				model.diffview = diffview.New(cfg, 1)
+			case ScreenCreatePR:
+				model.createpr = createpr.New(cfg, nil, nil, nil)
+			case ScreenReview:
+				model.review = review.New(cfg, nil, nil, 1, "Test PR", "diff")
+			}
+
+			// Press '?' to open help
+			msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}
+
+			newModel, _ := model.Update(msg)
+			m := newModel.(Model)
+
+			if m.screen != ScreenHelp {
+				t.Errorf("Update('?') from %s screen = %v, want %v", screen, m.screen, ScreenHelp)
+			}
+
+			if m.previousScreen != screen {
+				t.Errorf("Update('?') from %s previousScreen = %v, want %v", screen, m.previousScreen, screen)
+			}
+		})
+	}
+}
+
+func TestModel_Update_HelpKey_DoesNotOpenFromHelp(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.SetScreen(ScreenHelp)
+
+	// Press '?' while on help screen - should not change anything
+	// (help screen handles this internally to close itself)
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}
+
+	newModel, _ := model.Update(msg)
+	m := newModel.(Model)
+
+	// Should still be on help screen (the help screen Update will handle closing)
+	if m.screen != ScreenHelp {
+		t.Errorf("Update('?') from help screen should stay on help, got %v", m.screen)
+	}
+}
+
+func TestModel_Update_CloseHelpMsg_ReturnsToPreviewScreen(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Open help from dashboard
+	model.screen = ScreenHelp
+	model.previousScreen = ScreenDashboard
+
+	// Close help
+	msg := help.CloseHelpMsg{}
+
+	newModel, cmd := model.Update(msg)
+	m := newModel.(Model)
+
+	if m.screen != ScreenDashboard {
+		t.Errorf("Update(CloseHelpMsg) screen = %v, want %v", m.screen, ScreenDashboard)
+	}
+
+	// Should not return a command
+	if cmd != nil {
+		t.Error("Update(CloseHelpMsg) returned non-nil cmd, want nil")
+	}
+}
+
+func TestModel_Update_CloseHelpMsg_ReturnsToPRDetail(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Navigate to PR detail first
+	pr := testPR()
+	newModel, _ := model.Update(dashboard.OpenPRDetailMsg{PR: pr})
+	m := newModel.(Model)
+
+	// Open help from PR detail
+	m.screen = ScreenHelp
+	m.previousScreen = ScreenPRDetail
+
+	// Close help
+	msg := help.CloseHelpMsg{}
+
+	newModel, _ = m.Update(msg)
+	m = newModel.(Model)
+
+	if m.screen != ScreenPRDetail {
+		t.Errorf("Update(CloseHelpMsg) screen = %v, want %v", m.screen, ScreenPRDetail)
+	}
+}
+
+func TestModel_View_Help(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Open help
+	newModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m := newModel.(Model)
+
+	// Set size
+	newModel, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = newModel.(Model)
+
+	view := m.View()
+
+	if view == "" {
+		t.Error("View() on Help returned empty string")
+	}
+}
+
+func TestModel_Help_Accessor(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Open help
+	newModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m := newModel.(Model)
+
+	helpModel := m.Help()
+
+	// Verify help model was initialized
+	_ = helpModel.View()
+}
+
+func TestModel_PreviousScreen_Accessor(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Open help from dashboard
+	newModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m := newModel.(Model)
+
+	if m.PreviousScreen() != ScreenDashboard {
+		t.Errorf("PreviousScreen() = %v, want %v", m.PreviousScreen(), ScreenDashboard)
+	}
+}
+
+// =============================================================================
+// Toast Notification Tests
+// =============================================================================
+
+func TestModel_Update_ShowToastMsg(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	msg := ShowToastMsg{Message: "Test message", Type: ui.ToastSuccess}
+
+	newModel, cmd := model.Update(msg)
+	m := newModel.(Model)
+
+	if m.Toast() == nil {
+		t.Error("Update(ShowToastMsg) toast should not be nil")
+	}
+
+	if m.Toast().Message != "Test message" {
+		t.Errorf("Update(ShowToastMsg) toast.Message = %q, want %q", m.Toast().Message, "Test message")
+	}
+
+	if m.ToastTimer() != toastDuration {
+		t.Errorf("Update(ShowToastMsg) toastTimer = %d, want %d", m.ToastTimer(), toastDuration)
+	}
+
+	// Should return a tick command
+	if cmd == nil {
+		t.Error("Update(ShowToastMsg) returned nil cmd, want tick command")
+	}
+}
+
+func TestModel_Update_ShowToastMsg_Types(t *testing.T) {
+	tests := []struct {
+		name      string
+		toastType ui.ToastType
+	}{
+		{name: "info", toastType: ui.ToastInfo},
+		{name: "success", toastType: ui.ToastSuccess},
+		{name: "warning", toastType: ui.ToastWarning},
+		{name: "error", toastType: ui.ToastError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig()
+			model := New(cfg, "")
+
+			msg := ShowToastMsg{Message: "Test", Type: tt.toastType}
+
+			newModel, _ := model.Update(msg)
+			m := newModel.(Model)
+
+			if m.Toast() == nil {
+				t.Error("Toast should not be nil")
+			}
+
+			if m.Toast().Type != tt.toastType {
+				t.Errorf("Toast.Type = %v, want %v", m.Toast().Type, tt.toastType)
+			}
+		})
+	}
+}
+
+func TestModel_Update_ToastTickMsg_Decrements(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Show a toast first
+	newModel, _ := model.Update(ShowToastMsg{Message: "Test", Type: ui.ToastInfo})
+	m := newModel.(Model)
+
+	initialTimer := m.ToastTimer()
+
+	// Send tick
+	newModel, cmd := m.Update(ToastTickMsg{})
+	m = newModel.(Model)
+
+	if m.ToastTimer() != initialTimer-1 {
+		t.Errorf("Update(ToastTickMsg) toastTimer = %d, want %d", m.ToastTimer(), initialTimer-1)
+	}
+
+	// Should return another tick command
+	if cmd == nil {
+		t.Error("Update(ToastTickMsg) returned nil cmd, want tick command")
+	}
+}
+
+func TestModel_Update_ToastTickMsg_ClearsAtZero(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Show a toast first
+	newModel, _ := model.Update(ShowToastMsg{Message: "Test", Type: ui.ToastInfo})
+	m := newModel.(Model)
+
+	// Set timer to 1 so next tick clears it
+	m.toastTimer = 1
+
+	// Send tick
+	newModel, cmd := m.Update(ToastTickMsg{})
+	m = newModel.(Model)
+
+	if m.Toast() != nil {
+		t.Error("Update(ToastTickMsg) should clear toast when timer reaches 0")
+	}
+
+	if m.ToastTimer() != 0 {
+		t.Errorf("Update(ToastTickMsg) toastTimer = %d, want 0", m.ToastTimer())
+	}
+
+	// Should not return a tick command when cleared
+	if cmd != nil {
+		t.Error("Update(ToastTickMsg) should return nil cmd when toast is cleared")
+	}
+}
+
+func TestModel_Update_ClearToastMsg(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Show a toast first
+	newModel, _ := model.Update(ShowToastMsg{Message: "Test", Type: ui.ToastInfo})
+	m := newModel.(Model)
+
+	// Clear toast
+	newModel, cmd := m.Update(ClearToastMsg{})
+	m = newModel.(Model)
+
+	if m.Toast() != nil {
+		t.Error("Update(ClearToastMsg) toast should be nil")
+	}
+
+	if m.ToastTimer() != 0 {
+		t.Errorf("Update(ClearToastMsg) toastTimer = %d, want 0", m.ToastTimer())
+	}
+
+	// Should not return a command
+	if cmd != nil {
+		t.Error("Update(ClearToastMsg) returned non-nil cmd, want nil")
+	}
+}
+
+func TestModel_View_WithToast(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Show a toast
+	newModel, _ := model.Update(ShowToastMsg{Message: "Test toast", Type: ui.ToastSuccess})
+	m := newModel.(Model)
+
+	view := m.View()
+
+	if view == "" {
+		t.Error("View() with toast returned empty string")
+	}
+
+	// The view should contain the toast message
+	// Note: exact rendering may vary, just check it doesn't panic
+}
+
+func TestModel_Toast_Accessor(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Initially nil
+	if model.Toast() != nil {
+		t.Error("Toast() should be nil initially")
+	}
+
+	// After showing toast
+	newModel, _ := model.Update(ShowToastMsg{Message: "Test", Type: ui.ToastInfo})
+	m := newModel.(Model)
+
+	if m.Toast() == nil {
+		t.Error("Toast() should not be nil after ShowToastMsg")
+	}
+}
+
+func TestModel_ToastTimer_Accessor(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Initially 0
+	if model.ToastTimer() != 0 {
+		t.Errorf("ToastTimer() = %d, want 0 initially", model.ToastTimer())
+	}
+
+	// After showing toast
+	newModel, _ := model.Update(ShowToastMsg{Message: "Test", Type: ui.ToastInfo})
+	m := newModel.(Model)
+
+	if m.ToastTimer() != toastDuration {
+		t.Errorf("ToastTimer() = %d, want %d after ShowToastMsg", m.ToastTimer(), toastDuration)
+	}
+}
+
+// =============================================================================
+// Toast Integration Tests (via action messages)
+// =============================================================================
+
+func TestModel_Update_PRCreatedMsg_ShowsToast(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Navigate to create PR first
+	newModel, _ := model.Update(dashboard.CreatePRMsg{})
+	m := newModel.(Model)
+
+	// Simulate PR creation
+	newPR := &gh.PR{Number: 123, Title: "New PR"}
+	msg := createpr.PRCreatedMsg{PR: newPR}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	// Should navigate to PR detail
+	if m.screen != ScreenPRDetail {
+		t.Errorf("Update(PRCreatedMsg) screen = %v, want %v", m.screen, ScreenPRDetail)
+	}
+
+	// Should return a batch command (init + toast)
+	if cmd == nil {
+		t.Error("Update(PRCreatedMsg) returned nil cmd, want batch command")
+	}
+}
+
+func TestModel_Update_PRCreateErrorMsg_ShowsToast(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	msg := createpr.PRCreateErrorMsg{Err: fmt.Errorf("test error")}
+
+	_, cmd := model.Update(msg)
+
+	// Should return a command to show toast
+	if cmd == nil {
+		t.Error("Update(PRCreateErrorMsg) returned nil cmd, want showToast command")
+	}
+}
+
+func TestModel_Update_MergeDoneMsg_ShowsToast(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	msg := prdetail.MergeDoneMsg{}
+
+	_, cmd := model.Update(msg)
+
+	// Should return a command to show toast
+	if cmd == nil {
+		t.Error("Update(MergeDoneMsg) returned nil cmd, want showToast command")
+	}
+}
+
+func TestModel_Update_MergeErrorMsg_ShowsToast(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	msg := prdetail.MergeErrorMsg{Err: fmt.Errorf("merge failed")}
+
+	_, cmd := model.Update(msg)
+
+	// Should return a command to show toast
+	if cmd == nil {
+		t.Error("Update(MergeErrorMsg) returned nil cmd, want showToast command")
+	}
+}
+
+func TestModel_Update_ReviewSubmittedMsg_ShowsToast(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Navigate to PR detail first
+	pr := testPR()
+	newModel, _ := model.Update(dashboard.OpenPRDetailMsg{PR: pr})
+	m := newModel.(Model)
+
+	// Navigate to review
+	newModel, _ = m.Update(prdetail.StartReviewMsg{PRNumber: pr.Number, PRTitle: pr.Title, Diff: "diff"})
+	m = newModel.(Model)
+
+	// Submit review
+	msg := review.ReviewSubmittedMsg{}
+
+	newModel, cmd := m.Update(msg)
+	m = newModel.(Model)
+
+	// Should navigate to PR detail
+	if m.screen != ScreenPRDetail {
+		t.Errorf("Update(ReviewSubmittedMsg) screen = %v, want %v", m.screen, ScreenPRDetail)
+	}
+
+	// Should return a batch command (init + toast)
+	if cmd == nil {
+		t.Error("Update(ReviewSubmittedMsg) returned nil cmd, want batch command")
+	}
+}
+
+// =============================================================================
+// screenToHelpContext Tests
+// =============================================================================
+
+func TestScreenToHelpContext(t *testing.T) {
+	tests := []struct {
+		screen  Screen
+		context help.HelpContext
+	}{
+		{ScreenDashboard, help.HelpContextDashboard},
+		{ScreenPRDetail, help.HelpContextPRDetail},
+		{ScreenDiffView, help.HelpContextDiffView},
+		{ScreenCreatePR, help.HelpContextCreatePR},
+		{ScreenReview, help.HelpContextReview},
+		{ScreenHelp, help.HelpContextGlobal},
+		{Screen(99), help.HelpContextGlobal},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.screen.String(), func(t *testing.T) {
+			got := screenToHelpContext(tt.screen)
+			if got != tt.context {
+				t.Errorf("screenToHelpContext(%v) = %v, want %v", tt.screen, got, tt.context)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Message Routing Tests for Help Screen
+// =============================================================================
+
+func TestModel_Update_RoutesToHelp(t *testing.T) {
+	cfg := testConfig()
+	model := New(cfg, "")
+
+	// Open help screen
+	newModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m := newModel.(Model)
+
+	if m.screen != ScreenHelp {
+		t.Fatalf("Setup failed: screen = %v, want %v", m.screen, ScreenHelp)
+	}
+
+	// Send a key that help should handle (down arrow for scrolling)
+	msg := tea.KeyMsg{Type: tea.KeyDown}
+
+	newModel, _ = m.Update(msg)
+	m = newModel.(Model)
+
+	// Verify we're still on help
+	if m.screen != ScreenHelp {
+		t.Errorf("Message routing changed screen unexpectedly: got %v", m.screen)
+	}
 }
