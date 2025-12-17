@@ -2,22 +2,28 @@
 
 ## Current Status Summary
 
-The codebase has a solid foundation with Phase 1 (Core Infrastructure) now complete:
+The codebase has Phase 1 (Core Infrastructure) and Phase 2 (Main Screens) complete:
 
 | Component           | Status      | Coverage | Notes                                                   |
 |---------------------|-------------|----------|--------------------------------------------------------|
 | Configuration       | ✅ Complete | -        | TOML-based, auto-generated, all settings defined        |
 | LLM Subsystem       | ✅ Complete | -        | 3 providers (OpenAI, Anthropic, Ollama), full streaming |
 | LLM Core Types      | ✅ Complete | -        | Refactored to `internal/llm/core` to fix import cycle   |
-| Syntax Highlighting | ✅ Complete | -        | Chroma-based, diff-aware, theme support                 |
+| Syntax Highlighting | ✅ Complete | 60.0%    | Chroma-based, diff-aware, theme support                 |
 | UI Theming          | ✅ Complete | -        | Palette, accent colors, Lip Gloss styles                |
 | Entry Point         | ✅ Complete | -        | Config loading, Bubble Tea initialization               |
 | **internal/gh/**    | ✅ Complete | 89.9%    | GitHub CLI wrapper with full PR lifecycle support       |
 | **internal/git/**   | ✅ Complete | 89.7%    | Git utilities for repo, commits, diffs, branches        |
 | **UI Keymap**       | ✅ Complete | 82.9%    | 28 key bindings, config integration, help generation    |
 | **UI Components**   | ✅ Complete | 82.9%    | Spinner, StatusBadge, CheckIndicator, ErrorDisplay, ConfirmDialog |
+| **Dashboard Screen**| ✅ Complete | 50.1%    | PR list, navigation, filters, auto-refresh              |
+| **PR Detail Screen**| ✅ Complete | 67.6%    | Metadata, checks, reviews, merge, LLM summarize         |
+| **Diff Viewer**     | ✅ Complete | 82.0%    | Split panel, syntax highlighting, file tree             |
+| **Root Navigation** | ✅ Complete | 100%     | Screen state machine, message routing                   |
 
-## Phase 1 Implementation Details
+---
+
+## Phase 1 Implementation Details (Complete)
 
 ### internal/gh/ - GitHub CLI Wrapper (✅ Complete)
 
@@ -28,22 +34,8 @@ internal/gh/
 ├── pr.go           # ListPRs, GetPR, GetPRDiff, CreatePR, MergePR, ClosePR
 ├── review.go       # GetReviews, SubmitReview
 ├── checks.go       # GetChecks
-├── client_test.go  # Client construction and concurrency tests
-├── pr_test.go      # PR operation tests with mock executor
-├── review_test.go  # Review operation tests
-└── checks_test.go  # Check operation tests
+└── *_test.go       # Comprehensive tests
 ```
-
-**Functions implemented:**
-- `ListPRs(filters PRFilters) → ([]PR, error)`
-- `GetPR(number int) → (*PR, error)`
-- `GetPRDiff(number int) → (string, error)`
-- `CreatePR(base, head, title, body string, isDraft bool) → (*PR, error)`
-- `MergePR(number int, method MergeMethod) → error`
-- `ClosePR(number int) → error`
-- `GetReviews(prNumber int) → ([]Review, error)`
-- `SubmitReview(prNumber int, body string, event ReviewEvent) → error`
-- `GetChecks(prNumber int) → ([]Check, error)`
 
 ### internal/git/ - Git Utilities (✅ Complete)
 
@@ -54,49 +46,99 @@ internal/git/
 ├── commits.go      # GetCurrentBranch, GetCommitLog, GetCommitMessages, GetCommit, GetMergeBase
 ├── diff.go         # GetDiff, GetDiffStat, GetFileDiffs, GetStagedDiff, GetUnstagedDiff
 ├── branch.go       # ListBranches, GetBranch, BranchExists, GetDefaultBranch, CreateBranch, DeleteBranch
-├── repo_test.go    # Repository operation tests
-├── commits_test.go # Commit operation tests
-├── diff_test.go    # Diff operation tests
-└── branch_test.go  # Branch operation tests
+└── *_test.go       # Comprehensive tests
 ```
 
-**Functions implemented:**
-- Repo: `GetRepoInfo()`, `GetRootPath()`, `IsInsideWorkTree()`, `GetRemoteURL()`, `ListRemotes()`
-- Commits: `GetCurrentBranch()`, `GetCommitLog()`, `GetCommitMessages()`, `GetCommit()`, `GetCommitCount()`, `GetMergeBase()`, `GetHeadCommit()`, `ResolveRef()`
-- Diffs: `GetDiff()`, `GetDiffStat()`, `GetFileDiffs()`, `GetStagedDiff()`, `GetUnstagedDiff()`, `GetDiffForFile()`, `GetChangedFiles()`, `HasChanges()`, `HasStagedChanges()`, `HasUnstagedChanges()`
-- Branches: `ListBranches()`, `ListLocalBranches()`, `ListRemoteBranches()`, `GetBranch()`, `BranchExists()`, `GetUpstreamBranch()`, `GetDefaultBranch()`, `SetUpstream()`, `CreateBranch()`, `DeleteBranch()`, `RenameBranch()`, `CheckoutBranch()`, `GetBranchCommitsBehindAhead()`
+### internal/ui/ - UI System (✅ Complete)
 
-### internal/ui/keymap.go - Keyboard Bindings (✅ Complete)
+- **keymap.go**: 28 key bindings with config integration
+- **components.go**: StatusBadge, CheckIndicator, Spinner, ErrorDisplay, ConfirmDialog
+- **theme.go**: Palette, Styles, accent colors
 
-**28 key bindings organized by category:**
-- Global: Quit, Help, Confirm, Cancel
-- Navigation: Up, Down, Left, Right, PageUp, PageDown, Home, End
-- Vim-style: NextItem (j), PrevItem (k)
-- Actions: Select, Back, Refresh, Search, Filter
-- PR-specific: OpenInBrowser, ViewDiff, ViewDetails, CreatePR, MergePR, ClosePR, ApprovePR, RequestChanges
-- LLM: GenerateWithLLM, RegenerateLLM, AcceptLLM, EditLLM
-- Editor: Submit, ClearAll
+---
+
+## Phase 2 Implementation Details (Complete)
+
+### Dashboard Screen (✅ Complete)
+
+```
+internal/app/dashboard/
+├── model.go        # Main Bubble Tea model with State enum
+├── view.go         # Header, PR list, footer rendering
+├── update.go       # Message handling, key navigation
+├── messages.go     # PRsLoadedMsg, OpenPRDetailMsg, CreatePRMsg, etc.
+├── delegate.go     # Custom list delegates for PR items
+└── model_test.go   # 31 tests
+```
 
 **Features:**
-- `NewKeyMap(cfg)` - Creates KeyMap with config overrides
-- `DefaultKeyMap()` - Returns defaults without config
-- `ShortHelp()` / `FullHelp()` - Implements `help.KeyMap` interface
-- Config-aware (quit, help, confirm are user-configurable)
+- PR list with status badges, author, branch info, +/- stats
+- j/k or arrow navigation, enter to select
+- / for search/filter mode
+- r for refresh, c for create PR
+- Auto-refresh toggle (30s interval)
+- Loading spinner and error states
 
-### internal/ui/components.go - Reusable Components (✅ Complete)
+### PR Detail Screen (✅ Complete)
 
-**Components:**
-1. `StatusBadge` - PR state badges (open/closed/merged/draft) with colored backgrounds
-2. `CheckIndicator` - CI check status with icons (✓, ✗, ○, ◐, ⊘, ⊗)
-3. `Spinner` - Loading spinner with optional message (uses bubbles/spinner)
-4. `ErrorDisplay` - Bordered error box with optional title
-5. `ConfirmDialog` - Modal confirmation dialog with keyboard navigation
+```
+internal/app/prdetail/
+├── model.go        # Main model with State and Section enums
+├── view.go         # Header, tab bar, content, footer
+├── update.go       # Message handling, navigation
+├── messages.go     # Data loading, LLM streaming, action messages
+├── sections.go     # Info, Description, Checks, Reviews renderers
+└── model_test.go   # 56 tests
+```
 
-**Helpers:**
-- `Truncate(s string, maxLen int)` - Truncate with ellipsis
-- `PadRight(s string, width int)` - Fixed-width padding
-- `RelativeTime(t time.Time)` - Human-readable time ("2 hours ago")
-- `Divider(width int, p Palette)` - Horizontal divider line
+**Features:**
+- Tabbed sections: Info, Description, Checks, Reviews
+- Tab/Shift-Tab and number keys (1-4) for section navigation
+- PR metadata: title, status badge, author, branches, labels, stats
+- CI checks with status indicators and pass/fail counts
+- Reviews with state icons (approved, changes requested, etc.)
+- Actions: View diff (d), Open browser (o), Merge (m), Close (x), Summarize (g)
+- Confirmation dialogs for merge/close
+- LLM streaming support for AI summaries
+- Scrollable viewport with j/k navigation
+
+### Diff Viewer Screen (✅ Complete)
+
+```
+internal/app/diffview/
+├── model.go        # Main model with Focus enum
+├── view.go         # Split panel layout
+├── update.go       # Key handling, panel switching
+├── messages.go     # DiffLoadedMsg, BackToPRDetailMsg, etc.
+├── filetree.go     # File list with status indicators
+├── parser.go       # Unified diff parser
+├── parser_test.go  # Parser tests
+└── model_test.go   # Model tests
+```
+
+**Features:**
+- Split panel: 25% file tree, 75% diff content
+- File tree with status symbols (A/M/D/R), +/- counts
+- Syntax-highlighted diff (uses internal/syntax)
+- Optional line numbers (toggle with 'n')
+- Tab to switch focus between panels
+- j/k scroll, [/] to navigate files
+- Esc to go back to PR detail
+- Hunk selection infrastructure for LLM context
+
+### Root Model Navigation (✅ Complete)
+
+```
+internal/app/root/
+├── model.go        # Screen state machine, message routing
+└── model_test.go   # Navigation and routing tests
+```
+
+**Features:**
+- Screen enum: Dashboard, PRDetail, DiffView
+- Navigation message handling from all screens
+- Window size propagation to active screen
+- Global quit handler (configurable key + Ctrl+C)
 
 ---
 
@@ -104,43 +146,15 @@ internal/git/
 
 | Component          | Status         | Priority      |
 |--------------------|----------------|---------------|
-| Dashboard Screen   | ❌ Not started | P0 - Critical |
-| PR Detail Screen   | ❌ Not started | P0 - Critical |
-| Diff Viewer Screen | ❌ Not started | P0 - Critical |
 | Composer Screen    | ❌ Not started | P1 - High     |
 | Create PR Wizard   | ❌ Not started | P1 - High     |
 | Review Screen      | ❌ Not started | P1 - High     |
 | UI Layout          | ❌ Not started | P1 - High     |
+| Help Screen        | ❌ Not started | P2 - Medium   |
 
 ---
 
-## Phase 2: Main Screens (Next)
-
-### 5. Dashboard Screen (internal/app/dashboard/)
-- PR list with status indicators
-- Keyboard navigation (j/k, enter to select)
-- Filter/search capability
-- Auto-refresh toggle
-- Actions: open detail, create new PR
-
-### 6. PR Detail Screen (internal/app/prdetail/)
-- Display PR metadata (title, author, labels, reviewers)
-- Show description (markdown rendered)
-- CI checks status
-- Merge controls
-- LLM "Summarize" action (wired to existing provider)
-- Navigation to diff view
-
-### 7. Diff Viewer Screen (internal/app/diffview/)
-- Scrollable viewport with syntax-highlighted diff (use existing syntax.HighlightDiff)
-- File tree/navigation
-- Line numbers toggle
-- Hunk selection for LLM context
-- Navigation back to PR detail
-
----
-
-## Phase 3: LLM-Integrated Screens
+## Phase 3: LLM-Integrated Screens (Next)
 
 ### 8. Composer Screen (internal/app/composer/)
 - Multiline text editor (use bubbles/textarea)
@@ -164,10 +178,8 @@ internal/git/
 ## Phase 4: Polish & Integration
 
 ### 11. Root Model Enhancement (internal/app/root/)
-- Screen state machine
-- Navigation between screens
-- Global keybindings (quit, help)
 - Error toast/notifications
+- Loading overlay
 
 ### 12. Help Screen
 - Generated from keymap
@@ -188,15 +200,20 @@ internal/git/
 3. **Type Aliases**: `internal/llm/types.go` re-exports from `internal/llm/core` to avoid import cycles
 4. **Table-Driven Tests**: All tests use subtests with `t.Run()`
 5. **Error Wrapping**: Proper `fmt.Errorf("%w")` for error chains
+6. **Screen State Machine**: Root model manages active screen and routes messages
 
 ### Test Coverage Summary
 - `internal/gh/`: 89.9%
 - `internal/git/`: 89.7%
 - `internal/ui/`: 82.9%
+- `internal/app/dashboard/`: 50.1%
+- `internal/app/prdetail/`: 67.6%
+- `internal/app/diffview/`: 82.0%
+- `internal/app/root/`: 100%
 - All tests pass with `-race` detector
 - All linter checks pass (golangci-lint)
 
 ### File Statistics
-- Total Go source files: ~30
-- Total lines of code: ~7,500+
-- Test files: 12
+- Total Go source files: 59
+- Total lines of code: ~12,000+
+- Test files: 20+
