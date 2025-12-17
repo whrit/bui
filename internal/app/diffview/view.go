@@ -201,6 +201,12 @@ func (m *Model) renderCurrentFileDiff() string {
 	sb.WriteString(m.renderFileHeader(file))
 	sb.WriteString("\n\n")
 
+	// Check for binary file
+	if file.IsBinary {
+		sb.WriteString(m.renderBinaryFile())
+		return sb.String()
+	}
+
 	// Render each hunk
 	for hunkIdx, hunk := range file.Hunks {
 		sb.WriteString(m.renderHunk(file.DisplayPath(), hunkIdx, hunk))
@@ -217,6 +223,18 @@ func (m *Model) renderEmptyDiff() string {
 		Italic(true)
 
 	return style.Render("No file selected")
+}
+
+// renderBinaryFile renders a placeholder for binary files.
+func (m *Model) renderBinaryFile() string {
+	boxStyle := lipgloss.NewStyle().
+		Foreground(m.palette.Warn).
+		Background(m.palette.Panel).
+		Padding(1, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.palette.Warn)
+
+	return boxStyle.Render("[Binary file - no diff available]")
 }
 
 // renderFileHeader renders the header for a file diff.
@@ -262,19 +280,35 @@ func (m *Model) renderHunk(filePath string, hunkIdx int, hunk Hunk) string {
 
 	// Check if hunk is selected (for LLM context)
 	isSelected := m.IsHunkSelected(filePath, hunkIdx)
+	// Check if this is the current (focused) hunk
+	isCurrent := hunkIdx == m.currentHunkIndex && m.focus == FocusDiff
+
+	// Current hunk indicator
+	if isCurrent {
+		currentStyle := lipgloss.NewStyle().
+			Foreground(m.palette.Accent).
+			Bold(true)
+		sb.WriteString(currentStyle.Render("> "))
+	}
 
 	// Selection indicator
 	if isSelected {
 		selectStyle := lipgloss.NewStyle().
-			Foreground(m.palette.Accent).
+			Foreground(m.palette.Good).
 			Bold(true)
 		sb.WriteString(selectStyle.Render("[SELECTED] "))
 	}
 
-	// Hunk header styling
+	// Hunk header styling - highlight if current
 	hunkHeaderStyle := lipgloss.NewStyle().
 		Foreground(m.palette.Muted).
 		Background(m.palette.Panel)
+
+	if isCurrent {
+		hunkHeaderStyle = hunkHeaderStyle.
+			Foreground(m.palette.Accent).
+			Bold(true)
+	}
 
 	sb.WriteString(hunkHeaderStyle.Render(hunk.Header))
 	sb.WriteString("\n")
@@ -307,9 +341,78 @@ func (m *Model) renderDiffLine(line DiffLine, lexerName, themeName string) strin
 
 	// Apply syntax highlighting to the line content
 	highlighted := m.highlightLine(line, lexerName, themeName)
+
+	// Apply search highlighting if there's an active search
+	if len(m.searchMatches) > 0 && m.searchQuery != "" {
+		highlighted = m.highlightSearchMatches(highlighted, line.Content)
+	}
+
 	sb.WriteString(highlighted)
 
 	return sb.String()
+}
+
+// highlightSearchMatches highlights search matches in the line content.
+func (m *Model) highlightSearchMatches(rendered, original string) string {
+	if m.searchQuery == "" {
+		return rendered
+	}
+
+	lowerOriginal := strings.ToLower(original)
+	lowerQuery := strings.ToLower(m.searchQuery)
+
+	// Check if there are any matches in this line
+	if !strings.Contains(lowerOriginal, lowerQuery) {
+		return rendered
+	}
+
+	// Create highlight style
+	highlightStyle := lipgloss.NewStyle().
+		Background(m.palette.Warn).
+		Foreground(m.palette.Panel).
+		Bold(true)
+
+	// For simplicity, we highlight in the original content and re-apply styling
+	// This is a basic implementation that works with plain text
+	result := rendered
+
+	// Find and highlight all occurrences (case-insensitive)
+	lowerRendered := strings.ToLower(result)
+	startIdx := 0
+	var parts []string
+	lastEnd := 0
+
+	for {
+		idx := strings.Index(lowerRendered[startIdx:], lowerQuery)
+		if idx == -1 {
+			break
+		}
+		matchStart := startIdx + idx
+		matchEnd := matchStart + len(m.searchQuery)
+
+		// Add text before match
+		if matchStart > lastEnd {
+			parts = append(parts, result[lastEnd:matchStart])
+		}
+
+		// Add highlighted match
+		matchText := result[matchStart:matchEnd]
+		parts = append(parts, highlightStyle.Render(matchText))
+
+		lastEnd = matchEnd
+		startIdx = matchEnd
+	}
+
+	// Add remaining text
+	if lastEnd < len(result) {
+		parts = append(parts, result[lastEnd:])
+	}
+
+	if len(parts) > 0 {
+		return strings.Join(parts, "")
+	}
+
+	return rendered
 }
 
 // renderLineNumbers renders the line number gutter.
@@ -403,6 +506,13 @@ func (m Model) renderFooter() string {
 	descStyle := lipgloss.NewStyle().
 		Foreground(m.palette.Muted)
 
+	// If in search mode, show search input
+	if m.searchMode {
+		searchPrompt := keyStyle.Render("/") + descStyle.Render(m.searchQuery) + keyStyle.Render("_")
+		helpText := descStyle.Render("Enter to search, Esc to cancel")
+		return footerStyle.Render(searchPrompt + "  " + helpText)
+	}
+
 	// Build help text based on current focus
 	var helpItems []string
 
@@ -417,22 +527,55 @@ func (m Model) renderFooter() string {
 		)
 	} else {
 		helpItems = append(helpItems,
-			keyStyle.Render("[/]")+descStyle.Render(" prev/next file"),
+			keyStyle.Render("[/]")+descStyle.Render(" files"),
+			keyStyle.Render("{/}")+descStyle.Render(" hunks"),
+			keyStyle.Render("s")+descStyle.Render(" select"),
+			keyStyle.Render("/")+descStyle.Render(" search"),
+		)
+	}
+
+	// Show search navigation help if search is active
+	if len(m.searchMatches) > 0 {
+		helpItems = append(helpItems,
+			keyStyle.Render("n/N")+descStyle.Render(" next/prev match"),
+		)
+	} else {
+		helpItems = append(helpItems,
+			keyStyle.Render("n")+descStyle.Render(" line nums"),
 		)
 	}
 
 	helpItems = append(helpItems,
-		keyStyle.Render("n")+descStyle.Render(" line nums"),
 		keyStyle.Render("esc")+descStyle.Render(" back"),
 	)
 
 	helpText := strings.Join(helpItems, "  ")
 
-	// Add scroll position indicator
+	// Add scroll position indicator and selection info
 	scrollInfo := ""
 	if m.focus == FocusDiff {
+		file := m.CurrentFile()
+		if file != nil && len(file.Hunks) > 0 {
+			// Show hunk position
+			hunkInfo := fmt.Sprintf("Hunk %d/%d", m.currentHunkIndex+1, len(file.Hunks))
+			scrollInfo = descStyle.Render(hunkInfo)
+		}
+
+		// Show search match count
+		if len(m.searchMatches) > 0 {
+			searchStyle := lipgloss.NewStyle().Foreground(m.palette.Warn)
+			scrollInfo += " " + searchStyle.Render(fmt.Sprintf("[%d/%d matches]", m.CurrentMatchDisplay(), m.SearchMatchCount()))
+		}
+
+		// Show selection count
+		totalSelected := len(m.SelectedHunks())
+		if totalSelected > 0 {
+			selectStyle := lipgloss.NewStyle().Foreground(m.palette.Good)
+			scrollInfo += " " + selectStyle.Render(fmt.Sprintf("[%d selected]", totalSelected))
+		}
+
 		scrollPct := m.diffViewport.ScrollPercent()
-		scrollInfo = descStyle.Render(fmt.Sprintf(" %d%%", int(scrollPct*100)))
+		scrollInfo += descStyle.Render(fmt.Sprintf(" %d%%", int(scrollPct*100)))
 	}
 
 	// Calculate spacing

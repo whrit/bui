@@ -67,6 +67,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKeyMsg processes keyboard input in the ready state.
 func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle search mode input first
+	if m.searchMode {
+		return m.handleSearchInput(msg)
+	}
+
 	switch {
 	// Global keys
 	case key.Matches(msg, m.keymap.Quit):
@@ -81,19 +86,38 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	// Toggle line numbers
-	case msg.String() == "n":
+	case msg.String() == "n" && !m.hasActiveSearch():
 		m.toggleLineNumbers()
 		return m, nil
 
 	// Search in diff (when focused on diff)
 	case msg.String() == "/" && m.focus == FocusDiff:
-		// TODO: Implement search
+		m.searchMode = true
+		m.searchQuery = ""
 		return m, nil
+
+	// Next search match
+	case msg.String() == "n" && m.hasActiveSearch() && m.focus == FocusDiff:
+		m.nextMatch()
+		return m, nil
+
+	// Previous search match (Shift+N)
+	case msg.String() == "N" && m.hasActiveSearch() && m.focus == FocusDiff:
+		m.prevMatch()
+		return m, nil
+
+	// Clear search with Escape when search is active
+	case key.Matches(msg, m.keymap.Back) && m.hasActiveSearch():
+		m.clearSearch()
+		return m, nil
+
+	// Toggle hunk selection with 's' key (when focused on diff)
+	case msg.String() == "s" && m.focus == FocusDiff:
+		return m.toggleCurrentHunkSelection()
 
 	// Space to toggle hunk selection (when focused on diff)
 	case msg.String() == " " && m.focus == FocusDiff:
-		// TODO: Implement hunk selection mode
-		return m, nil
+		return m.toggleCurrentHunkSelection()
 	}
 
 	// Handle focus-specific navigation
@@ -101,6 +125,43 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFileTreeKeys(msg)
 	}
 	return m.handleDiffKeys(msg)
+}
+
+// handleSearchInput handles keyboard input during search mode.
+func (m Model) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		// Execute search and exit search mode
+		m.searchMode = false
+		m.executeSearch()
+		return m, nil
+
+	case tea.KeyEsc:
+		// Cancel search
+		m.searchMode = false
+		m.searchQuery = ""
+		return m, nil
+
+	case tea.KeyBackspace:
+		// Remove last character from search query
+		if len(m.searchQuery) > 0 {
+			m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+		}
+		return m, nil
+
+	case tea.KeyRunes:
+		// Add character to search query
+		m.searchQuery += string(msg.Runes)
+		return m, nil
+
+	default:
+		return m, nil
+	}
+}
+
+// hasActiveSearch returns true if there's an active search with matches.
+func (m *Model) hasActiveSearch() bool {
+	return len(m.searchMatches) > 0 || m.searchQuery != ""
 }
 
 // handleFileTreeKeys handles keyboard input when file tree has focus.
@@ -200,6 +261,15 @@ func (m Model) handleDiffKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectFileByIndex(prevIdx)
 			m.fileList.Select(prevIdx)
 		}
+		return m, nil
+
+	// } and { to navigate between hunks
+	case msg.String() == "}":
+		m.nextHunk()
+		return m, nil
+
+	case msg.String() == "{":
+		m.prevHunk()
 		return m, nil
 	}
 

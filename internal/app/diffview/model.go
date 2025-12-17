@@ -1,6 +1,8 @@
 package diffview
 
 import (
+	"strings"
+
 	"bui/internal/config"
 	"bui/internal/gh"
 	"bui/internal/ui"
@@ -106,14 +108,21 @@ type Model struct {
 	files    []FileDiff
 
 	// UI state
-	state         State
-	focus         Focus
-	fileList      list.Model
-	diffViewport  viewport.Model
-	selectedFile  int
-	showLineNums  bool
-	hunkSelection map[string]map[int]bool // map[filepath]map[hunkIdx]selected
-	err           error
+	state            State
+	focus            Focus
+	fileList         list.Model
+	diffViewport     viewport.Model
+	selectedFile     int
+	currentHunkIndex int                     // Index of the currently focused hunk within the file
+	showLineNums     bool
+	hunkSelection    map[string]map[int]bool // map[filepath]map[hunkIdx]selected
+	err              error
+
+	// Search state
+	searchMode         bool          // Whether search mode is active
+	searchQuery        string        // Current search query
+	searchMatches      []SearchMatch // All matches in current file
+	currentMatchIndex  int           // Index of currently highlighted match
 
 	// Spinner for loading state
 	spinner ui.Spinner
@@ -302,6 +311,51 @@ func (m Model) SelectedHunks() []SelectHunkMsg {
 	return selected
 }
 
+// CurrentHunkIndex returns the index of the currently focused hunk.
+func (m Model) CurrentHunkIndex() int {
+	return m.currentHunkIndex
+}
+
+// GetSelectedHunksContent returns full content of selected hunks for LLM context.
+func (m Model) GetSelectedHunksContent() []SelectedHunkContent {
+	var hunks []SelectedHunkContent
+	for filePath, hunkMap := range m.hunkSelection {
+		for hunkIdx, isSelected := range hunkMap {
+			if !isSelected {
+				continue
+			}
+			// Find the file and hunk
+			for _, f := range m.files {
+				if f.DisplayPath() != filePath || hunkIdx >= len(f.Hunks) {
+					continue
+				}
+				hunk := f.Hunks[hunkIdx]
+				var lines []string
+				for _, line := range hunk.Lines {
+					lines = append(lines, line.Content)
+				}
+				hunks = append(hunks, SelectedHunkContent{
+					FilePath: filePath,
+					HunkIdx:  hunkIdx,
+					Header:   hunk.Header,
+					Lines:    lines,
+				})
+				break
+			}
+		}
+	}
+	return hunks
+}
+
+// TotalHunksInCurrentFile returns the total number of hunks in the current file.
+func (m Model) TotalHunksInCurrentFile() int {
+	file := m.CurrentFile()
+	if file == nil {
+		return 0
+	}
+	return len(file.Hunks)
+}
+
 // =============================================================================
 // Internal Helpers
 // =============================================================================
@@ -336,6 +390,7 @@ func (m *Model) selectFileByIndex(idx int) {
 		return
 	}
 	m.selectedFile = idx
+	m.currentHunkIndex = 0 // Reset hunk index when changing files
 	m.fileList.Select(idx)
 	m.updateDiffContent()
 }
@@ -353,4 +408,156 @@ func (m *Model) toggleFocus() {
 func (m *Model) toggleLineNumbers() {
 	m.showLineNums = !m.showLineNums
 	m.updateDiffContent()
+}
+
+// nextHunk moves to the next hunk in the current file.
+func (m *Model) nextHunk() {
+	file := m.CurrentFile()
+	if file == nil || len(file.Hunks) == 0 {
+		return
+	}
+	if m.currentHunkIndex < len(file.Hunks)-1 {
+		m.currentHunkIndex++
+		m.updateDiffContent()
+	}
+}
+
+// prevHunk moves to the previous hunk in the current file.
+func (m *Model) prevHunk() {
+	if m.currentHunkIndex > 0 {
+		m.currentHunkIndex--
+		m.updateDiffContent()
+	}
+}
+
+// toggleCurrentHunkSelection toggles selection of the current hunk.
+func (m *Model) toggleCurrentHunkSelection() (Model, tea.Cmd) {
+	file := m.CurrentFile()
+	if file == nil || len(file.Hunks) == 0 || file.IsBinary {
+		return *m, nil
+	}
+
+	filePath := file.DisplayPath()
+	m.toggleHunkSelection(filePath, m.currentHunkIndex)
+	m.updateDiffContent()
+
+	// Return a message indicating the selection changed
+	hunk := file.Hunks[m.currentHunkIndex]
+	isSelected := m.IsHunkSelected(filePath, m.currentHunkIndex)
+	return *m, selectHunk(filePath, m.currentHunkIndex, hunk.Header, isSelected)
+}
+
+// =============================================================================
+// Search Methods
+// =============================================================================
+
+// findMatches finds all matches of the search query in the current file's diff.
+func (m *Model) findMatches(query string) []SearchMatch {
+	if query == "" {
+		return nil
+	}
+
+	file := m.CurrentFile()
+	if file == nil || file.IsBinary {
+		return nil
+	}
+
+	var matches []SearchMatch
+	lowerQuery := strings.ToLower(query)
+
+	for hunkIdx, hunk := range file.Hunks {
+		for lineIdx, line := range hunk.Lines {
+			content := line.Content
+			lowerContent := strings.ToLower(content)
+
+			// Find all occurrences in this line
+			startIdx := 0
+			for {
+				idx := strings.Index(lowerContent[startIdx:], lowerQuery)
+				if idx == -1 {
+					break
+				}
+				matchStart := startIdx + idx
+				matchEnd := matchStart + len(query)
+				matches = append(matches, SearchMatch{
+					HunkIdx:  hunkIdx,
+					LineIdx:  lineIdx,
+					StartPos: matchStart,
+					EndPos:   matchEnd,
+					Content:  content[matchStart:matchEnd],
+				})
+				startIdx = matchEnd
+			}
+		}
+	}
+
+	return matches
+}
+
+// executeSearch performs the search and updates search state.
+func (m *Model) executeSearch() {
+	m.searchMatches = m.findMatches(m.searchQuery)
+	m.currentMatchIndex = 0
+	if len(m.searchMatches) > 0 {
+		// Jump to first match
+		m.currentHunkIndex = m.searchMatches[0].HunkIdx
+	}
+	m.updateDiffContent()
+}
+
+// nextMatch moves to the next search match.
+func (m *Model) nextMatch() {
+	if len(m.searchMatches) == 0 {
+		return
+	}
+	m.currentMatchIndex = (m.currentMatchIndex + 1) % len(m.searchMatches)
+	match := m.searchMatches[m.currentMatchIndex]
+	m.currentHunkIndex = match.HunkIdx
+	m.updateDiffContent()
+}
+
+// prevMatch moves to the previous search match.
+func (m *Model) prevMatch() {
+	if len(m.searchMatches) == 0 {
+		return
+	}
+	m.currentMatchIndex--
+	if m.currentMatchIndex < 0 {
+		m.currentMatchIndex = len(m.searchMatches) - 1
+	}
+	match := m.searchMatches[m.currentMatchIndex]
+	m.currentHunkIndex = match.HunkIdx
+	m.updateDiffContent()
+}
+
+// clearSearch clears the search state.
+func (m *Model) clearSearch() {
+	m.searchMode = false
+	m.searchQuery = ""
+	m.searchMatches = nil
+	m.currentMatchIndex = 0
+	m.updateDiffContent()
+}
+
+// IsSearchMode returns whether search mode is active.
+func (m Model) IsSearchMode() bool {
+	return m.searchMode
+}
+
+// SearchQuery returns the current search query.
+func (m Model) SearchQuery() string {
+	return m.searchQuery
+}
+
+// SearchMatchCount returns the total number of search matches.
+func (m Model) SearchMatchCount() int {
+	return len(m.searchMatches)
+}
+
+// CurrentMatchIndex returns the current match index (1-based for display).
+func (m Model) CurrentMatchDisplay() int {
+	if len(m.searchMatches) == 0 {
+		return 0
+	}
+	return m.currentMatchIndex + 1
 }

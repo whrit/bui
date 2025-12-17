@@ -405,4 +405,3 @@ func getReviewStateStyle(state string, p ui.Palette) (string, lipgloss.Style) {
 		return "?", lipgloss.NewStyle().Foreground(p.Muted)
 	}
 }
-

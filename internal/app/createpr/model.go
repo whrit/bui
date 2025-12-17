@@ -506,8 +506,21 @@ func (m Model) getSelectedBranch() string {
 // =============================================================================
 
 // readNextToken creates a command to read the next LLM token.
+// Uses a priority select pattern to ensure errors are handled promptly.
 func (m Model) readNextToken() tea.Cmd {
 	return func() tea.Msg {
+		// First, check for errors without blocking (priority check)
+		select {
+		case err := <-m.errCh:
+			if err != nil {
+				return DraftErrorMsg{Err: err}
+			}
+			return DraftDoneMsg{}
+		default:
+			// No error pending, continue to read token
+		}
+
+		// Now read token or wait for error
 		select {
 		case token, ok := <-m.tokenCh:
 			if !ok {

@@ -806,3 +806,450 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// =============================================================================
+// Draft Parsing Tests
+// =============================================================================
+
+func TestParseDraftOutput_CaseVariations(t *testing.T) {
+	cfg := testConfig()
+	gitExec := newMockGitExecutor()
+	ghExec := newMockGHExecutor()
+	gitRepo := git.NewWithExecutor(gitExec)
+	ghClient := gh.NewWithExecutor(ghExec)
+
+	tests := []struct {
+		name          string
+		input         string
+		expectedTitle string
+		expectedBody  string
+	}{
+		{
+			name:          "standard Title: and Body:",
+			input:         "Title: Add new feature\nBody:\nThis is the body",
+			expectedTitle: "Add new feature",
+			expectedBody:  "This is the body",
+		},
+		{
+			name:          "lowercase title: and body:",
+			input:         "title: lowercase feature\nbody:\nLowercase body content",
+			expectedTitle: "lowercase feature",
+			expectedBody:  "Lowercase body content",
+		},
+		{
+			name:          "uppercase TITLE: and BODY:",
+			input:         "TITLE: UPPERCASE FEATURE\nBODY:\nUppercase body content",
+			expectedTitle: "UPPERCASE FEATURE",
+			expectedBody:  "Uppercase body content",
+		},
+		{
+			name:          "mixed case TiTlE: and BoDy:",
+			input:         "TiTlE: Mixed Case Feature\nBoDy:\nMixed case body",
+			expectedTitle: "Mixed Case Feature",
+			expectedBody:  "Mixed case body",
+		},
+		{
+			name:          "title with quotes",
+			input:         "Title: \"Quoted title\"\nBody:\nBody content",
+			expectedTitle: "Quoted title",
+			expectedBody:  "Body content",
+		},
+		{
+			name:          "title with single quotes",
+			input:         "Title: 'Single quoted'\nBody:\nBody here",
+			expectedTitle: "Single quoted",
+			expectedBody:  "Body here",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := New(cfg, ghClient, gitRepo, nil)
+			model.streamedText = tt.input
+			model.parseDraftOutput()
+
+			if model.generatedTitle != tt.expectedTitle {
+				t.Errorf("expected title %q, got %q", tt.expectedTitle, model.generatedTitle)
+			}
+			if model.generatedBody != tt.expectedBody {
+				t.Errorf("expected body %q, got %q", tt.expectedBody, model.generatedBody)
+			}
+		})
+	}
+}
+
+func TestParseDraftOutput_MarkdownHeaders(t *testing.T) {
+	cfg := testConfig()
+	gitExec := newMockGitExecutor()
+	ghExec := newMockGHExecutor()
+	gitRepo := git.NewWithExecutor(gitExec)
+	ghClient := gh.NewWithExecutor(ghExec)
+
+	tests := []struct {
+		name          string
+		input         string
+		expectedTitle string
+		expectedBody  string
+	}{
+		{
+			name:          "h1 title header",
+			input:         "# Title: My Feature\n## Body\nBody content here",
+			expectedTitle: "My Feature",
+			expectedBody:  "Body content here",
+		},
+		{
+			name:          "h2 title header",
+			input:         "## Title: Another Feature\n## Body:\nMore body content",
+			expectedTitle: "Another Feature",
+			expectedBody:  "More body content",
+		},
+		{
+			name:          "h1 title without colon",
+			input:         "# Title My Feature\n# Body\nThe body text",
+			expectedTitle: "My Feature",
+			expectedBody:  "The body text",
+		},
+		{
+			name:          "lowercase markdown header",
+			input:         "# title: lowercase header\n# body\nBody text",
+			expectedTitle: "lowercase header",
+			expectedBody:  "Body text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := New(cfg, ghClient, gitRepo, nil)
+			model.streamedText = tt.input
+			model.parseDraftOutput()
+
+			if model.generatedTitle != tt.expectedTitle {
+				t.Errorf("expected title %q, got %q", tt.expectedTitle, model.generatedTitle)
+			}
+			if model.generatedBody != tt.expectedBody {
+				t.Errorf("expected body %q, got %q", tt.expectedBody, model.generatedBody)
+			}
+		})
+	}
+}
+
+func TestParseDraftOutput_WhitespaceVariations(t *testing.T) {
+	cfg := testConfig()
+	gitExec := newMockGitExecutor()
+	ghExec := newMockGHExecutor()
+	gitRepo := git.NewWithExecutor(gitExec)
+	ghClient := gh.NewWithExecutor(ghExec)
+
+	tests := []struct {
+		name          string
+		input         string
+		expectedTitle string
+		expectedBody  string
+	}{
+		{
+			name:          "space before colon",
+			input:         "Title : Spaced colon\nBody :\nSpaced body",
+			expectedTitle: "Spaced colon",
+			expectedBody:  "Spaced body",
+		},
+		{
+			name:          "multiple spaces before colon",
+			input:         "Title  : Double spaced\nBody  :\nDouble spaced body",
+			expectedTitle: "Double spaced",
+			expectedBody:  "Double spaced body",
+		},
+		{
+			name:          "tab before colon",
+			input:         "Title\t: Tabbed colon\nBody\t:\nTabbed body",
+			expectedTitle: "Tabbed colon",
+			expectedBody:  "Tabbed body",
+		},
+		{
+			name:          "extra whitespace in content",
+			input:         "Title:   Extra spaces in content  \nBody:\n  Indented body  ",
+			expectedTitle: "Extra spaces in content",
+			expectedBody:  "Indented body",
+		},
+		{
+			name:          "body with markdown variant",
+			input:         "Title: Feature name\nBody (markdown):\n## Summary\nContent here",
+			expectedTitle: "Feature name",
+			expectedBody:  "## Summary\nContent here",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := New(cfg, ghClient, gitRepo, nil)
+			model.streamedText = tt.input
+			model.parseDraftOutput()
+
+			if model.generatedTitle != tt.expectedTitle {
+				t.Errorf("expected title %q, got %q", tt.expectedTitle, model.generatedTitle)
+			}
+			if model.generatedBody != tt.expectedBody {
+				t.Errorf("expected body %q, got %q", tt.expectedBody, model.generatedBody)
+			}
+		})
+	}
+}
+
+func TestParseDraftOutput_Validation(t *testing.T) {
+	cfg := testConfig()
+	gitExec := newMockGitExecutor()
+	ghExec := newMockGHExecutor()
+	gitRepo := git.NewWithExecutor(gitExec)
+	ghClient := gh.NewWithExecutor(ghExec)
+
+	t.Run("title truncation at max length", func(t *testing.T) {
+		model := New(cfg, ghClient, gitRepo, nil)
+		// Create a title longer than maxTitleLength (200)
+		longTitle := ""
+		for i := 0; i < 250; i++ {
+			longTitle += "a"
+		}
+		model.streamedText = "Title: " + longTitle + "\nBody:\nShort body"
+		model.parseDraftOutput()
+
+		if len(model.generatedTitle) != 200 {
+			t.Errorf("expected title length 200, got %d", len(model.generatedTitle))
+		}
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		model := New(cfg, ghClient, gitRepo, nil)
+		model.streamedText = ""
+		model.parseDraftOutput()
+
+		if model.generatedTitle != "" {
+			t.Errorf("expected empty title for empty input, got %q", model.generatedTitle)
+		}
+		if model.generatedBody != "" {
+			t.Errorf("expected empty body for empty input, got %q", model.generatedBody)
+		}
+	})
+
+	t.Run("whitespace only input", func(t *testing.T) {
+		model := New(cfg, ghClient, gitRepo, nil)
+		model.streamedText = "   \n\t\n   "
+		model.parseDraftOutput()
+
+		if model.generatedTitle != "" {
+			t.Errorf("expected empty title for whitespace input, got %q", model.generatedTitle)
+		}
+	})
+
+	t.Run("title only no body marker", func(t *testing.T) {
+		model := New(cfg, ghClient, gitRepo, nil)
+		model.streamedText = "Title: Just a title\n\nSome content without body marker"
+		model.parseDraftOutput()
+
+		if model.generatedTitle != "Just a title" {
+			t.Errorf("expected title 'Just a title', got %q", model.generatedTitle)
+		}
+		if model.generatedBody != "Some content without body marker" {
+			t.Errorf("expected body 'Some content without body marker', got %q", model.generatedBody)
+		}
+	})
+
+	t.Run("no labels first line as title", func(t *testing.T) {
+		model := New(cfg, ghClient, gitRepo, nil)
+		model.streamedText = "My PR Title\n\nThis is the description"
+		model.parseDraftOutput()
+
+		if model.generatedTitle != "My PR Title" {
+			t.Errorf("expected title 'My PR Title', got %q", model.generatedTitle)
+		}
+		if model.generatedBody != "This is the description" {
+			t.Errorf("expected body 'This is the description', got %q", model.generatedBody)
+		}
+	})
+
+	t.Run("backtick quotes removed", func(t *testing.T) {
+		model := New(cfg, ghClient, gitRepo, nil)
+		model.streamedText = "Title: `Backtick title`\nBody:\nContent"
+		model.parseDraftOutput()
+
+		if model.generatedTitle != "Backtick title" {
+			t.Errorf("expected title 'Backtick title', got %q", model.generatedTitle)
+		}
+	})
+}
+
+func TestExtractLabeledContent(t *testing.T) {
+	tests := []struct {
+		name            string
+		line            string
+		label           string
+		expectedContent string
+		expectedFound   bool
+	}{
+		{
+			name:            "standard title",
+			line:            "Title: My Feature",
+			label:           "title",
+			expectedContent: "My Feature",
+			expectedFound:   true,
+		},
+		{
+			name:            "uppercase",
+			line:            "TITLE: MY FEATURE",
+			label:           "title",
+			expectedContent: "MY FEATURE",
+			expectedFound:   true,
+		},
+		{
+			name:            "space before colon",
+			line:            "Title : My Feature",
+			label:           "title",
+			expectedContent: "My Feature",
+			expectedFound:   true,
+		},
+		{
+			name:            "no match",
+			line:            "Something else",
+			label:           "title",
+			expectedContent: "",
+			expectedFound:   false,
+		},
+		{
+			name:            "body label",
+			line:            "Body: Content here",
+			label:           "body",
+			expectedContent: "Content here",
+			expectedFound:   true,
+		},
+		{
+			name:            "empty content after label",
+			line:            "Title:",
+			label:           "title",
+			expectedContent: "",
+			expectedFound:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, found := extractLabeledContent(tt.line, tt.label)
+			if found != tt.expectedFound {
+				t.Errorf("expected found=%v, got %v", tt.expectedFound, found)
+			}
+			if content != tt.expectedContent {
+				t.Errorf("expected content %q, got %q", tt.expectedContent, content)
+			}
+		})
+	}
+}
+
+func TestExtractMarkdownHeader(t *testing.T) {
+	tests := []struct {
+		name            string
+		line            string
+		label           string
+		expectedContent string
+		expectedFound   bool
+	}{
+		{
+			name:            "h1 title with colon",
+			line:            "# Title: My Feature",
+			label:           "title",
+			expectedContent: "My Feature",
+			expectedFound:   true,
+		},
+		{
+			name:            "h2 title with colon",
+			line:            "## Title: Another Feature",
+			label:           "title",
+			expectedContent: "Another Feature",
+			expectedFound:   true,
+		},
+		{
+			name:            "h1 title without colon",
+			line:            "# Title My Feature",
+			label:           "title",
+			expectedContent: "My Feature",
+			expectedFound:   true,
+		},
+		{
+			name:            "body header",
+			line:            "## Body",
+			label:           "body",
+			expectedContent: "",
+			expectedFound:   true,
+		},
+		{
+			name:            "not a header",
+			line:            "Title: Not a header",
+			label:           "title",
+			expectedContent: "",
+			expectedFound:   false,
+		},
+		{
+			name:            "wrong label",
+			line:            "# Summary: Something",
+			label:           "title",
+			expectedContent: "",
+			expectedFound:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, found := extractMarkdownHeader(tt.line, tt.label)
+			if found != tt.expectedFound {
+				t.Errorf("expected found=%v, got %v", tt.expectedFound, found)
+			}
+			if content != tt.expectedContent {
+				t.Errorf("expected content %q, got %q", tt.expectedContent, content)
+			}
+		})
+	}
+}
+
+func TestNormalizeLabel(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "no changes needed",
+			input:    "title:content",
+			expected: "title:content",
+		},
+		{
+			name:     "space before colon",
+			input:    "title :content",
+			expected: "title:content",
+		},
+		{
+			name:     "multiple spaces before colon",
+			input:    "title  :content",
+			expected: "title:content",
+		},
+		{
+			name:     "uppercase to lowercase",
+			input:    "TITLE:CONTENT",
+			expected: "title:content",
+		},
+		{
+			name:     "tab before colon",
+			input:    "title\t:content",
+			expected: "title:content",
+		},
+		{
+			name:     "space after colon preserved in content",
+			input:    "title: content",
+			expected: "title: content",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeLabel(tt.input)
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}

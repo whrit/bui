@@ -6,6 +6,7 @@ package review
 import (
 	"context"
 	"strings"
+	"time"
 
 	"bui/internal/config"
 	"bui/internal/gh"
@@ -17,6 +18,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// defaultLLMTimeout is the default timeout for LLM generation in seconds.
+const defaultLLMTimeout = 60
 
 // =============================================================================
 // Constants
@@ -339,8 +343,21 @@ func (m Model) canProceedToPreview() bool {
 // =============================================================================
 
 // readNextToken creates a command to read the next LLM token.
+// Uses a priority select pattern to ensure errors are handled promptly.
 func (m Model) readNextToken() tea.Cmd {
 	return func() tea.Msg {
+		// First, check for errors without blocking (priority check)
+		select {
+		case err := <-m.errCh:
+			if err != nil {
+				return GenerateCommentErrorMsg{Err: err}
+			}
+			return GenerateCommentDoneMsg{}
+		default:
+			// No error pending, continue to read token
+		}
+
+		// Now read token or wait for error
 		select {
 		case token, ok := <-m.tokenCh:
 			if !ok {
@@ -365,8 +382,14 @@ func (m *Model) startGeneration() tea.Cmd {
 	m.isGenerating = true
 	m.generatedComment = "" // Clear previous output
 
-	// Create context for cancellation
-	ctx, cancel := context.WithCancel(context.Background())
+	// Determine timeout duration
+	timeout := defaultLLMTimeout * time.Second
+	if m.cfg.LLM.Timeout > 0 {
+		timeout = time.Duration(m.cfg.LLM.Timeout) * time.Second
+	}
+
+	// Create context with timeout for cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	m.llmCtx = ctx
 	m.llmCancel = cancel
 

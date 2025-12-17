@@ -50,7 +50,8 @@ type SummaryStartMsg struct{}
 
 // SummaryTokenMsg contains a single token from the LLM stream.
 type SummaryTokenMsg struct {
-	Token string
+	Token        string
+	GenerationID int64 // Tracks which generation this token belongs to
 }
 
 // SummaryDoneMsg signals that LLM summary generation is complete.

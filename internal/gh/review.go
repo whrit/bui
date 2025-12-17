@@ -9,6 +9,10 @@ import (
 
 // GetReviews retrieves all reviews for a pull request.
 func (c *Client) GetReviews(prNumber int) ([]Review, error) {
+	if err := validatePRNumber(prNumber); err != nil {
+		return nil, err
+	}
+
 	args := []string{
 		"pr", "reviews",
 		strconv.Itoa(prNumber),
@@ -17,7 +21,7 @@ func (c *Client) GetReviews(prNumber int) ([]Review, error) {
 
 	output, err := c.executor.Run(ghCommand, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get reviews for PR #%d: %w", prNumber, err)
+		return nil, NewPRError(prNumber, "get reviews", err)
 	}
 
 	var reviews []Review
@@ -30,6 +34,10 @@ func (c *Client) GetReviews(prNumber int) ([]Review, error) {
 
 // SubmitReview submits a review on a pull request.
 func (c *Client) SubmitReview(prNumber int, body string, event ReviewEvent) error {
+	if err := validatePRNumber(prNumber); err != nil {
+		return err
+	}
+
 	args := []string{
 		"pr", "review",
 		strconv.Itoa(prNumber),
@@ -43,7 +51,7 @@ func (c *Client) SubmitReview(prNumber int, body string, event ReviewEvent) erro
 
 	_, err := c.executor.Run(ghCommand, args...)
 	if err != nil {
-		return fmt.Errorf("failed to submit review on PR #%d: %w", prNumber, err)
+		return NewPRError(prNumber, "submit review", err)
 	}
 
 	return nil

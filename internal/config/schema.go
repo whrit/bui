@@ -27,6 +27,7 @@ type LLMConfig struct {
 	MaxTokens   int     `toml:"max_tokens"`
 	Temperature float64 `toml:"temperature"`
 	Stream      bool    `toml:"stream"`
+	Timeout     int     `toml:"timeout"` // Timeout in seconds for LLM generation (default: 60)
 
 	Privacy LLMPrivacyConfig `toml:"privacy"`
 	Local   LocalLLMConfig   `toml:"local"`

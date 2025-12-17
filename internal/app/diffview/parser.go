@@ -65,6 +65,7 @@ type FileDiff struct {
 	OldPath   string // Path in the old version (may be /dev/null for new files)
 	NewPath   string // Path in the new version (may be /dev/null for deleted files)
 	Status    string // "added", "deleted", "modified", "renamed"
+	IsBinary  bool   // True if file is binary (no diff content available)
 	Hunks     []Hunk // Parsed hunks
 	Additions int    // Total lines added
 	Deletions int    // Total lines deleted
@@ -157,6 +158,19 @@ func ParseDiff(raw string) []FileDiff {
 			} else if currentFile.NewPath == "" {
 				currentFile.NewPath = path
 			}
+			continue
+		}
+
+		// Check for binary file indication
+		if currentFile != nil && (strings.Contains(line, "Binary files") ||
+			(strings.Contains(line, "differ") && strings.Contains(line, "and"))) {
+			currentFile.IsBinary = true
+			continue
+		}
+
+		// Also handle GIT binary patch format
+		if currentFile != nil && strings.HasPrefix(line, "GIT binary patch") {
+			currentFile.IsBinary = true
 			continue
 		}
 

@@ -168,9 +168,20 @@ func (m Model) handleSummaryStart() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Don't start if already summarizing
+	if m.state == StateSummarizing {
+		return m, nil
+	}
+
+	// Cancel any previous operation before starting a new one
+	m.Cleanup()
+
 	m.state = StateSummarizing
 	m.spinner = m.spinner.WithMessage("Generating summary...")
 	m.summary = "" // Clear previous summary
+
+	// Increment generation ID to invalidate any stale messages
+	m.generationID++
 
 	// Create context for cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -208,14 +219,24 @@ func (m Model) handleSummaryStart() (tea.Model, tea.Cmd) {
 
 // readNextToken creates a command to read the next LLM token.
 func (m Model) readNextToken() tea.Cmd {
+	// Capture generation ID for stale message detection
+	genID := m.generationID
+	tokenCh := m.tokenCh
+	errCh := m.errCh
+
 	return func() tea.Msg {
+		// Guard against nil channels (can happen if Cleanup was called)
+		if tokenCh == nil || errCh == nil {
+			return SummaryDoneMsg{}
+		}
+
 		select {
-		case token, ok := <-m.tokenCh:
+		case token, ok := <-tokenCh:
 			if !ok {
 				return SummaryDoneMsg{}
 			}
-			return SummaryTokenMsg{Token: token.Text}
-		case err := <-m.errCh:
+			return SummaryTokenMsg{Token: token.Text, GenerationID: genID}
+		case err := <-errCh:
 			if err != nil {
 				return SummaryErrorMsg{Err: err}
 			}
@@ -226,6 +247,11 @@ func (m Model) readNextToken() tea.Cmd {
 
 // handleSummaryToken processes an incoming LLM token.
 func (m Model) handleSummaryToken(msg SummaryTokenMsg) (tea.Model, tea.Cmd) {
+	// Ignore stale messages from a previous generation
+	if msg.GenerationID != m.generationID {
+		return m, nil
+	}
+
 	m.summary += msg.Token
 	m.updateViewportContent()
 	return m, m.readNextToken()
@@ -234,9 +260,7 @@ func (m Model) handleSummaryToken(msg SummaryTokenMsg) (tea.Model, tea.Cmd) {
 // handleSummaryDone completes the LLM summary generation.
 func (m Model) handleSummaryDone() (tea.Model, tea.Cmd) {
 	m.state = StateReady
-	if m.llmCancel != nil {
-		m.llmCancel()
-	}
+	m.Cleanup()
 	m.updateViewportContent()
 	return m, nil
 }
@@ -245,9 +269,7 @@ func (m Model) handleSummaryDone() (tea.Model, tea.Cmd) {
 func (m Model) handleSummaryError(msg SummaryErrorMsg) (tea.Model, tea.Cmd) {
 	m.state = StateError
 	m.err = msg.Err
-	if m.llmCancel != nil {
-		m.llmCancel()
-	}
+	m.Cleanup()
 	return m, nil
 }
 
@@ -315,8 +337,10 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleLoadingKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keymap.Back), key.Matches(msg, m.keymap.Cancel):
+		m.Cleanup() // Cancel any ongoing operations before navigating away
 		return m, backToDashboard()
 	case key.Matches(msg, m.keymap.Quit):
+		m.Cleanup()
 		return m, tea.Quit
 	}
 	return m, nil
@@ -326,8 +350,10 @@ func (m Model) handleLoadingKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleErrorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keymap.Back), key.Matches(msg, m.keymap.Cancel):
+		m.Cleanup() // Cancel any ongoing operations before navigating away
 		return m, backToDashboard()
 	case key.Matches(msg, m.keymap.Quit):
+		m.Cleanup()
 		return m, tea.Quit
 	case key.Matches(msg, m.keymap.Refresh):
 		// Retry loading
@@ -353,15 +379,15 @@ func (m Model) handleSummarizingKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keymap.Cancel):
 		// Cancel LLM streaming
-		if m.llmCancel != nil {
-			m.llmCancel()
-		}
+		m.Cleanup()
 		m.state = StateReady
 		return m, nil
+	case key.Matches(msg, m.keymap.Back):
+		// Cancel and navigate back
+		m.Cleanup()
+		return m, backToDashboard()
 	case key.Matches(msg, m.keymap.Quit):
-		if m.llmCancel != nil {
-			m.llmCancel()
-		}
+		m.Cleanup()
 		return m, tea.Quit
 	}
 	return m, nil
@@ -383,10 +409,12 @@ func (m Model) handleReadyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	// Back to dashboard
 	case key.Matches(msg, m.keymap.Back), key.Matches(msg, m.keymap.Cancel):
+		m.Cleanup() // Cancel any ongoing operations before navigating away
 		return m, backToDashboard()
 
 	// Quit
 	case key.Matches(msg, m.keymap.Quit):
+		m.Cleanup()
 		return m, tea.Quit
 
 	// Tab navigation
@@ -421,6 +449,7 @@ func (m Model) handleReadyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// View diff
 	case key.Matches(msg, m.keymap.ViewDiff):
+		m.Cleanup() // Cancel any ongoing operations before navigating away
 		return m, viewDiff(m.prNumber)
 
 	// Open in browser
@@ -454,6 +483,7 @@ func (m Model) handleReadyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Start review (write review)
 	case msg.String() == "w":
 		if m.pr != nil && m.pr.State == "OPEN" {
+			m.Cleanup() // Cancel any ongoing operations before navigating away
 			return m, startReview(m.prNumber, m.pr.Title, m.diff)
 		}
 		return m, nil
@@ -578,4 +608,3 @@ func (m Model) showCloseConfirmation() (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
-

@@ -5,6 +5,8 @@ package composer
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"bui/internal/config"
 	"bui/internal/llm"
@@ -13,6 +15,13 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+// ErrLLMTimeout is returned when LLM generation exceeds the configured timeout.
+var ErrLLMTimeout = errors.New("LLM generation timed out")
 
 // =============================================================================
 // Constants
@@ -33,6 +42,9 @@ const (
 
 	// defaultTextareaHeight is the default height for the textarea.
 	defaultTextareaHeight = 10
+
+	// defaultLLMTimeout is the default timeout for LLM generation in seconds.
+	defaultLLMTimeout = 60
 )
 
 // =============================================================================
@@ -216,8 +228,25 @@ func (m Model) IsGenerating() bool {
 // =============================================================================
 
 // readNextToken creates a command to read the next LLM token.
+// Uses a priority select pattern to ensure errors are handled promptly.
 func (m Model) readNextToken() tea.Cmd {
 	return func() tea.Msg {
+		// First, check for errors without blocking (priority check)
+		select {
+		case err := <-m.errCh:
+			if err != nil {
+				// Convert context deadline exceeded to LLM timeout error
+				if errors.Is(err, context.DeadlineExceeded) {
+					return GenerateErrorMsg{Err: ErrLLMTimeout}
+				}
+				return GenerateErrorMsg{Err: err}
+			}
+			return GenerateDoneMsg{}
+		default:
+			// No error pending, continue to read token
+		}
+
+		// Now read token or wait for error
 		select {
 		case token, ok := <-m.tokenCh:
 			if !ok {
@@ -226,6 +255,10 @@ func (m Model) readNextToken() tea.Cmd {
 			return GenerateTokenMsg{Token: token.Text}
 		case err := <-m.errCh:
 			if err != nil {
+				// Convert context deadline exceeded to LLM timeout error
+				if errors.Is(err, context.DeadlineExceeded) {
+					return GenerateErrorMsg{Err: ErrLLMTimeout}
+				}
 				return GenerateErrorMsg{Err: err}
 			}
 			return GenerateDoneMsg{}
@@ -242,8 +275,14 @@ func (m *Model) startGeneration() tea.Cmd {
 	m.state = StateGenerating
 	m.streamedText = "" // Clear previous output
 
-	// Create context for cancellation
-	ctx, cancel := context.WithCancel(context.Background())
+	// Determine timeout duration
+	timeout := defaultLLMTimeout * time.Second
+	if m.cfg.LLM.Timeout > 0 {
+		timeout = time.Duration(m.cfg.LLM.Timeout) * time.Second
+	}
+
+	// Create context with timeout for cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	m.llmCtx = ctx
 	m.llmCancel = cancel
 

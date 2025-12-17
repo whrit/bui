@@ -3,6 +3,7 @@ package createpr
 import (
 	"context"
 	"strings"
+	"time"
 
 	"bui/internal/llm"
 	"bui/internal/llm/prompts"
@@ -11,6 +12,9 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// defaultLLMTimeout is the default timeout for LLM generation in seconds.
+const defaultLLMTimeout = 60
 
 // Update implements tea.Model. It handles all incoming messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -162,8 +166,14 @@ func (m Model) handleDraftStart() (tea.Model, tea.Cmd) {
 	m.generatedTitle = ""
 	m.generatedBody = ""
 
-	// Create context for cancellation
-	ctx, cancel := context.WithCancel(context.Background())
+	// Determine timeout duration
+	timeout := defaultLLMTimeout * time.Second
+	if m.cfg.LLM.Timeout > 0 {
+		timeout = time.Duration(m.cfg.LLM.Timeout) * time.Second
+	}
+
+	// Create context with timeout for cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	m.llmCtx = ctx
 	m.llmCancel = cancel
 
@@ -237,7 +247,6 @@ func (m *Model) parseDraftOutput() {
 		return
 	}
 
-	// Look for "Title:" prefix
 	lines := strings.Split(text, "\n")
 	titleFound := false
 	bodyStart := 0
@@ -245,20 +254,24 @@ func (m *Model) parseDraftOutput() {
 	for i, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 
-		// Check for Title: prefix
+		// Check for Title: prefix (case-insensitive with whitespace handling)
 		if !titleFound {
-			if strings.HasPrefix(strings.ToLower(trimmedLine), "title:") {
-				m.generatedTitle = strings.TrimSpace(strings.TrimPrefix(trimmedLine, "Title:"))
-				m.generatedTitle = strings.TrimSpace(strings.TrimPrefix(m.generatedTitle, "title:"))
-				m.generatedTitle = strings.Trim(m.generatedTitle, "\"'")
+			if titleContent, found := extractLabeledContent(trimmedLine, "title"); found {
+				m.generatedTitle = strings.Trim(titleContent, "\"'")
+				titleFound = true
+				continue
+			}
+
+			// Check for markdown header format: "# Title" or "## Title"
+			if mdContent, found := extractMarkdownHeader(trimmedLine, "title"); found {
+				m.generatedTitle = strings.Trim(mdContent, "\"'")
 				titleFound = true
 				continue
 			}
 
 			// If first non-empty line doesn't have Title:, use it as title
 			if trimmedLine != "" && i == 0 {
-				m.generatedTitle = trimmedLine
-				m.generatedTitle = strings.Trim(m.generatedTitle, "\"'")
+				m.generatedTitle = strings.Trim(trimmedLine, "\"'")
 				titleFound = true
 				bodyStart = i + 1
 				continue
@@ -267,8 +280,18 @@ func (m *Model) parseDraftOutput() {
 
 		// Look for Body: or start of body content
 		if titleFound {
-			if strings.HasPrefix(strings.ToLower(trimmedLine), "body:") ||
-				strings.HasPrefix(strings.ToLower(trimmedLine), "body (markdown):") {
+			if _, found := extractLabeledContent(trimmedLine, "body"); found {
+				bodyStart = i + 1
+				break
+			}
+			// Check for "body (markdown):" variant
+			if strings.HasPrefix(normalizeLabel(trimmedLine), "body(markdown):") ||
+				strings.HasPrefix(normalizeLabel(trimmedLine), "body (markdown):") {
+				bodyStart = i + 1
+				break
+			}
+			// Check for markdown header format: "# Body" or "## Body"
+			if _, found := extractMarkdownHeader(trimmedLine, "body"); found {
 				bodyStart = i + 1
 				break
 			}
@@ -293,6 +316,105 @@ func (m *Model) parseDraftOutput() {
 			m.generatedBody = strings.TrimSpace(strings.Join(lines[1:], "\n"))
 		}
 	}
+
+	// Validate and sanitize the generated content
+	m.validateGeneratedContent()
+}
+
+// extractLabeledContent extracts content after a label like "Title:" or "Body:".
+// It handles case variations (Title:, title:, TITLE:) and whitespace (Title :, Title  :).
+// Returns the content and true if the label was found, empty string and false otherwise.
+func extractLabeledContent(line, label string) (string, bool) {
+	normalized := normalizeLabel(line)
+	labelLower := strings.ToLower(label) + ":"
+
+	if strings.HasPrefix(normalized, labelLower) {
+		// Find the position of the colon in the original line to extract content
+		colonIdx := strings.Index(strings.ToLower(line), ":")
+		if colonIdx >= 0 && colonIdx < len(line)-1 {
+			return strings.TrimSpace(line[colonIdx+1:]), true
+		}
+		// Label found but no content after colon
+		return "", true
+	}
+	return "", false
+}
+
+// extractMarkdownHeader extracts content from markdown header format.
+// Handles "# Title", "## Title", "# Title:", "## Body", etc.
+// Returns the content and true if the header was found.
+func extractMarkdownHeader(line, label string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+
+	// Check for markdown header pattern: # or ## followed by the label
+	if !strings.HasPrefix(trimmed, "#") {
+		return "", false
+	}
+
+	// Remove leading # characters
+	content := strings.TrimLeft(trimmed, "#")
+	content = strings.TrimSpace(content)
+
+	// Check if it starts with the label (case-insensitive)
+	labelLower := strings.ToLower(label)
+	contentLower := strings.ToLower(content)
+
+	if strings.HasPrefix(contentLower, labelLower) {
+		// Remove the label and any trailing colon
+		remaining := strings.TrimSpace(content[len(label):])
+		remaining = strings.TrimPrefix(remaining, ":")
+		remaining = strings.TrimSpace(remaining)
+
+		// If there's content on the same line, return it
+		if remaining != "" {
+			return remaining, true
+		}
+		// Label header found but content is on next line
+		return "", true
+	}
+
+	return "", false
+}
+
+// normalizeLabel normalizes a line for label comparison by:
+// - Converting to lowercase
+// - Removing extra whitespace around the colon
+func normalizeLabel(line string) string {
+	lower := strings.ToLower(line)
+	// Remove spaces before colon: "title :" -> "title:"
+	// Handle multiple spaces: "title  :" -> "title:"
+	result := strings.Builder{}
+	prevSpace := false
+	for _, r := range lower {
+		if r == ' ' || r == '\t' {
+			prevSpace = true
+			continue
+		}
+		if r == ':' {
+			// Skip any accumulated spaces before colon
+			prevSpace = false
+		} else if prevSpace {
+			result.WriteRune(' ')
+			prevSpace = false
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
+}
+
+// validateGeneratedContent validates and sanitizes the generated title and body.
+func (m *Model) validateGeneratedContent() {
+	// Trim whitespace
+	m.generatedTitle = strings.TrimSpace(m.generatedTitle)
+	m.generatedBody = strings.TrimSpace(m.generatedBody)
+
+	// Truncate title if too long
+	if len(m.generatedTitle) > maxTitleLength {
+		m.generatedTitle = m.generatedTitle[:maxTitleLength]
+	}
+
+	// Remove any remaining quotes at start/end of title
+	m.generatedTitle = strings.Trim(m.generatedTitle, "\"'`")
 }
 
 // handleDraftError processes LLM errors.

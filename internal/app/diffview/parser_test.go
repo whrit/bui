@@ -100,6 +100,45 @@ index 1234567..abcdefg 100644
  }
 `
 
+const binaryFileDiff = `diff --git a/image.png b/image.png
+new file mode 100644
+index 0000000..abcdef1
+Binary files /dev/null and b/image.png differ
+`
+
+const binaryFileDiffModified = `diff --git a/icon.ico b/icon.ico
+index 1234567..abcdefg 100644
+Binary files a/icon.ico and b/icon.ico differ
+`
+
+const gitBinaryPatchDiff = `diff --git a/data.bin b/data.bin
+index 1234567..abcdefg 100644
+GIT binary patch
+literal 1234
+somebase64encodeddata==
+`
+
+const mixedBinaryTextDiff = `diff --git a/main.go b/main.go
+index 1234567..abcdefg 100644
+--- a/main.go
++++ b/main.go
+@@ -1,3 +1,4 @@
+ package main
++// comment
+ func main() {}
+diff --git a/logo.png b/logo.png
+new file mode 100644
+index 0000000..abcdef1
+Binary files /dev/null and b/logo.png differ
+diff --git a/util.go b/util.go
+index 1234567..abcdefg 100644
+--- a/util.go
++++ b/util.go
+@@ -1,2 +1,3 @@
+ package main
++func helper() {}
+`
+
 // =============================================================================
 // ParseDiff Tests
 // =============================================================================
@@ -550,6 +589,144 @@ func TestParseDiff_PathsWithSpaces(t *testing.T) {
 
 	if files[0].NewPath != "path with spaces/file.go" {
 		t.Errorf("expected path with spaces, got %q", files[0].NewPath)
+	}
+}
+
+// =============================================================================
+// Binary File Tests
+// =============================================================================
+
+func TestParseDiff_BinaryFile(t *testing.T) {
+	files := ParseDiff(binaryFileDiff)
+
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+
+	f := files[0]
+	if !f.IsBinary {
+		t.Error("expected file to be marked as binary")
+	}
+	if f.NewPath != "image.png" {
+		t.Errorf("expected NewPath 'image.png', got %q", f.NewPath)
+	}
+	if len(f.Hunks) != 0 {
+		t.Errorf("expected 0 hunks for binary file, got %d", len(f.Hunks))
+	}
+}
+
+func TestParseDiff_BinaryFileModified(t *testing.T) {
+	files := ParseDiff(binaryFileDiffModified)
+
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+
+	f := files[0]
+	if !f.IsBinary {
+		t.Error("expected file to be marked as binary")
+	}
+	if f.NewPath != "icon.ico" {
+		t.Errorf("expected NewPath 'icon.ico', got %q", f.NewPath)
+	}
+}
+
+func TestParseDiff_GitBinaryPatch(t *testing.T) {
+	files := ParseDiff(gitBinaryPatchDiff)
+
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+
+	f := files[0]
+	if !f.IsBinary {
+		t.Error("expected file to be marked as binary (GIT binary patch)")
+	}
+}
+
+func TestParseDiff_MixedBinaryAndText(t *testing.T) {
+	files := ParseDiff(mixedBinaryTextDiff)
+
+	if len(files) != 3 {
+		t.Fatalf("expected 3 files, got %d", len(files))
+	}
+
+	// First file: main.go (text)
+	if files[0].IsBinary {
+		t.Error("main.go should not be binary")
+	}
+	if files[0].NewPath != "main.go" {
+		t.Errorf("expected first file main.go, got %q", files[0].NewPath)
+	}
+	if len(files[0].Hunks) == 0 {
+		t.Error("main.go should have hunks")
+	}
+
+	// Second file: logo.png (binary)
+	if !files[1].IsBinary {
+		t.Error("logo.png should be binary")
+	}
+	if files[1].NewPath != "logo.png" {
+		t.Errorf("expected second file logo.png, got %q", files[1].NewPath)
+	}
+
+	// Third file: util.go (text)
+	if files[2].IsBinary {
+		t.Error("util.go should not be binary")
+	}
+	if files[2].NewPath != "util.go" {
+		t.Errorf("expected third file util.go, got %q", files[2].NewPath)
+	}
+}
+
+func TestParseDiff_BinaryFileTableDriven(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantBinary bool
+		wantPath   string
+	}{
+		{
+			name:       "new binary file",
+			input:      binaryFileDiff,
+			wantBinary: true,
+			wantPath:   "image.png",
+		},
+		{
+			name:       "modified binary file",
+			input:      binaryFileDiffModified,
+			wantBinary: true,
+			wantPath:   "icon.ico",
+		},
+		{
+			name:       "GIT binary patch format",
+			input:      gitBinaryPatchDiff,
+			wantBinary: true,
+			wantPath:   "data.bin",
+		},
+		{
+			name:       "normal text file",
+			input:      sampleDiff,
+			wantBinary: false,
+			wantPath:   "main.go",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := ParseDiff(tt.input)
+			if len(files) != 1 {
+				t.Fatalf("expected 1 file, got %d", len(files))
+			}
+
+			f := files[0]
+			if f.IsBinary != tt.wantBinary {
+				t.Errorf("IsBinary = %v, want %v", f.IsBinary, tt.wantBinary)
+			}
+			if f.NewPath != tt.wantPath {
+				t.Errorf("NewPath = %q, want %q", f.NewPath, tt.wantPath)
+			}
+		})
 	}
 }
 

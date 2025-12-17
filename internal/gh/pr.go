@@ -28,6 +28,10 @@ func (c *Client) ListPRs(filters PRFilters) ([]PR, error) {
 
 // GetPR retrieves a single pull request by number.
 func (c *Client) GetPR(number int) (*PR, error) {
+	if err := validatePRNumber(number); err != nil {
+		return nil, err
+	}
+
 	args := []string{
 		"pr", "view",
 		strconv.Itoa(number),
@@ -36,7 +40,7 @@ func (c *Client) GetPR(number int) (*PR, error) {
 
 	output, err := c.executor.Run(ghCommand, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get PR #%d: %w", number, err)
+		return nil, NewPRError(number, "get", err)
 	}
 
 	var pr PR
@@ -49,6 +53,10 @@ func (c *Client) GetPR(number int) (*PR, error) {
 
 // GetPRDiff retrieves the diff for a pull request.
 func (c *Client) GetPRDiff(number int) (string, error) {
+	if err := validatePRNumber(number); err != nil {
+		return "", err
+	}
+
 	args := []string{
 		"pr", "diff",
 		strconv.Itoa(number),
@@ -56,7 +64,7 @@ func (c *Client) GetPRDiff(number int) (string, error) {
 
 	output, err := c.executor.Run(ghCommand, args...)
 	if err != nil {
-		return "", fmt.Errorf("failed to get diff for PR #%d: %w", number, err)
+		return "", NewPRError(number, "get diff", err)
 	}
 
 	return string(output), nil
@@ -94,6 +102,10 @@ func (c *Client) CreatePR(base, head, title, body string, isDraft bool) (*PR, er
 
 // MergePR merges a pull request using the specified merge method.
 func (c *Client) MergePR(number int, method MergeMethod) error {
+	if err := validatePRNumber(number); err != nil {
+		return err
+	}
+
 	args := []string{
 		"pr", "merge",
 		strconv.Itoa(number),
@@ -102,7 +114,7 @@ func (c *Client) MergePR(number int, method MergeMethod) error {
 
 	_, err := c.executor.Run(ghCommand, args...)
 	if err != nil {
-		return fmt.Errorf("failed to merge PR #%d: %w", number, err)
+		return NewPRError(number, "merge", err)
 	}
 
 	return nil
@@ -110,6 +122,10 @@ func (c *Client) MergePR(number int, method MergeMethod) error {
 
 // ClosePR closes a pull request without merging.
 func (c *Client) ClosePR(number int) error {
+	if err := validatePRNumber(number); err != nil {
+		return err
+	}
+
 	args := []string{
 		"pr", "close",
 		strconv.Itoa(number),
@@ -117,7 +133,7 @@ func (c *Client) ClosePR(number int) error {
 
 	_, err := c.executor.Run(ghCommand, args...)
 	if err != nil {
-		return fmt.Errorf("failed to close PR #%d: %w", number, err)
+		return NewPRError(number, "close", err)
 	}
 
 	return nil

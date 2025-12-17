@@ -1202,6 +1202,367 @@ func TestUpdate_CloseErrorMsg(t *testing.T) {
 }
 
 // =============================================================================
+// Cleanup Tests
+// =============================================================================
+
+func TestCleanup(t *testing.T) {
+	t.Run("cancels context and clears channels", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.pr = testPR()
+		m.diff = "diff content"
+
+		// Simulate LLM streaming state
+		ctx, cancel := context.WithCancel(context.Background())
+		m.llmCtx = ctx
+		m.llmCancel = cancel
+		tokenCh := make(chan llm.Token)
+		errCh := make(chan error)
+		m.tokenCh = tokenCh
+		m.errCh = errCh
+
+		// Call Cleanup
+		m.Cleanup()
+
+		// Verify everything is cleaned up
+		if m.llmCancel != nil {
+			t.Error("expected llmCancel to be nil after cleanup")
+		}
+		if m.llmCtx != nil {
+			t.Error("expected llmCtx to be nil after cleanup")
+		}
+		if m.tokenCh != nil {
+			t.Error("expected tokenCh to be nil after cleanup")
+		}
+		if m.errCh != nil {
+			t.Error("expected errCh to be nil after cleanup")
+		}
+
+		// Verify context was cancelled
+		select {
+		case <-ctx.Done():
+			// Expected - context was cancelled
+		default:
+			t.Error("expected context to be cancelled")
+		}
+	})
+
+	t.Run("is safe to call multiple times", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+
+		// Call Cleanup multiple times - should not panic
+		m.Cleanup()
+		m.Cleanup()
+		m.Cleanup()
+	})
+
+	t.Run("is safe to call with nil fields", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		// All fields are nil by default
+
+		// Should not panic
+		m.Cleanup()
+	})
+}
+
+func TestCleanup_OnNavigation(t *testing.T) {
+	t.Run("cleanup is called on back navigation", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.state = StateReady
+		m.pr = testPR()
+
+		// Set up LLM streaming state
+		ctx, cancel := context.WithCancel(context.Background())
+		m.llmCtx = ctx
+		m.llmCancel = cancel
+
+		// Trigger back navigation
+		msg := tea.KeyMsg{Type: tea.KeyEsc}
+		newModel, cmd := m.Update(msg)
+		m = newModel.(Model)
+
+		// Verify cleanup was called
+		if m.llmCancel != nil {
+			t.Error("expected llmCancel to be nil after back navigation")
+		}
+
+		// Verify we're navigating back
+		if cmd == nil {
+			t.Fatal("expected a command")
+		}
+		resultMsg := cmd()
+		if _, ok := resultMsg.(BackToDashboardMsg); !ok {
+			t.Errorf("expected BackToDashboardMsg, got %T", resultMsg)
+		}
+
+		// Verify original context was cancelled
+		select {
+		case <-ctx.Done():
+			// Expected
+		default:
+			t.Error("expected context to be cancelled on navigation")
+		}
+	})
+
+	t.Run("cleanup is called on view diff navigation", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.state = StateReady
+		m.pr = testPR()
+
+		// Set up LLM streaming state
+		ctx, cancel := context.WithCancel(context.Background())
+		m.llmCtx = ctx
+		m.llmCancel = cancel
+
+		// Trigger view diff navigation
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+		newModel, cmd := m.Update(msg)
+		m = newModel.(Model)
+
+		// Verify cleanup was called
+		if m.llmCancel != nil {
+			t.Error("expected llmCancel to be nil after view diff navigation")
+		}
+
+		// Verify we're navigating to diff view
+		if cmd == nil {
+			t.Fatal("expected a command")
+		}
+		resultMsg := cmd()
+		if _, ok := resultMsg.(ViewDiffMsg); !ok {
+			t.Errorf("expected ViewDiffMsg, got %T", resultMsg)
+		}
+
+		// Verify original context was cancelled
+		select {
+		case <-ctx.Done():
+			// Expected
+		default:
+			t.Error("expected context to be cancelled on navigation")
+		}
+	})
+
+	t.Run("cleanup is called during summarizing state on cancel", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.state = StateSummarizing
+		m.pr = testPR()
+
+		// Set up LLM streaming state
+		ctx, cancel := context.WithCancel(context.Background())
+		m.llmCtx = ctx
+		m.llmCancel = cancel
+
+		// Trigger cancel during summarization (ESC key cancels but stays on screen)
+		msg := tea.KeyMsg{Type: tea.KeyEsc}
+		newModel, _ := m.Update(msg)
+		m = newModel.(Model)
+
+		// Verify cleanup was called
+		if m.llmCancel != nil {
+			t.Error("expected llmCancel to be nil after cancel during summarization")
+		}
+
+		// Verify context was cancelled
+		select {
+		case <-ctx.Done():
+			// Expected
+		default:
+			t.Error("expected context to be cancelled on cancel")
+		}
+
+		// Verify state is back to ready (cancellation stops summarizing but stays on screen)
+		if m.state != StateReady {
+			t.Errorf("expected state=StateReady after cancel, got %s", m.state)
+		}
+	})
+
+	t.Run("cleanup is called on start review navigation", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.state = StateReady
+		m.pr = testPR()
+		m.diff = "diff content"
+
+		// Set up LLM streaming state
+		ctx, cancel := context.WithCancel(context.Background())
+		m.llmCtx = ctx
+		m.llmCancel = cancel
+
+		// Trigger start review navigation
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}}
+		newModel, cmd := m.Update(msg)
+		m = newModel.(Model)
+
+		// Verify cleanup was called
+		if m.llmCancel != nil {
+			t.Error("expected llmCancel to be nil after start review navigation")
+		}
+
+		// Verify we're navigating to review
+		if cmd == nil {
+			t.Fatal("expected a command")
+		}
+		resultMsg := cmd()
+		if _, ok := resultMsg.(StartReviewMsg); !ok {
+			t.Errorf("expected StartReviewMsg, got %T", resultMsg)
+		}
+
+		// Verify original context was cancelled
+		select {
+		case <-ctx.Done():
+			// Expected
+		default:
+			t.Error("expected context to be cancelled on navigation")
+		}
+	})
+}
+
+// =============================================================================
+// Stale Message Detection Tests
+// =============================================================================
+
+func TestGenerationID(t *testing.T) {
+	t.Run("initial generation ID is zero", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+
+		if m.GenerationID() != 0 {
+			t.Errorf("expected initial generationID=0, got %d", m.GenerationID())
+		}
+	})
+
+	t.Run("generation ID increments on summary start", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.state = StateReady
+		m.pr = testPR()
+		m.diff = "diff content"
+
+		// Set up mock LLM provider
+		mockProvider := newMockLLMProvider([]string{"test"}, nil)
+		m.SetLLMProvider(mockProvider)
+
+		initialID := m.GenerationID()
+
+		// Trigger summary start
+		msg := SummaryStartMsg{}
+		newModel, _ := m.Update(msg)
+		m = newModel.(Model)
+
+		if m.GenerationID() != initialID+1 {
+			t.Errorf("expected generationID=%d, got %d", initialID+1, m.GenerationID())
+		}
+	})
+}
+
+func TestStaleMessageDetection(t *testing.T) {
+	t.Run("stale tokens are ignored", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.state = StateSummarizing
+		m.pr = testPR()
+		m.generationID = 5 // Current generation
+
+		// Set up channels for streaming (to prevent readNextToken from panicking)
+		tokenCh := make(chan llm.Token, 10)
+		errCh := make(chan error, 1)
+		m.tokenCh = tokenCh
+		m.errCh = errCh
+
+		// Send a stale token (from generation 3)
+		staleMsg := SummaryTokenMsg{Token: "stale token", GenerationID: 3}
+		newModel, cmd := m.Update(staleMsg)
+		m = newModel.(Model)
+
+		// Verify token was ignored
+		if m.summary != "" {
+			t.Errorf("expected summary to be empty (stale token ignored), got %q", m.summary)
+		}
+
+		// Verify no command was returned (no further token reading)
+		if cmd != nil {
+			t.Error("expected no command for stale token")
+		}
+	})
+
+	t.Run("current generation tokens are processed", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.state = StateSummarizing
+		m.pr = testPR()
+		m.generationID = 5 // Current generation
+
+		// Set up channels for streaming
+		tokenCh := make(chan llm.Token, 10)
+		errCh := make(chan error, 1)
+		m.tokenCh = tokenCh
+		m.errCh = errCh
+
+		// Send a token from the current generation
+		currentMsg := SummaryTokenMsg{Token: "valid token", GenerationID: 5}
+		newModel, cmd := m.Update(currentMsg)
+		m = newModel.(Model)
+
+		// Verify token was processed
+		if m.summary != "valid token" {
+			t.Errorf("expected summary='valid token', got %q", m.summary)
+		}
+
+		// Verify a command was returned (to read next token)
+		if cmd == nil {
+			t.Error("expected a command to read next token")
+		}
+	})
+}
+
+func TestDoubleSummarizationPrevention(t *testing.T) {
+	t.Run("cannot start summarization while already summarizing", func(t *testing.T) {
+		cfg := testConfig()
+		m := New(cfg, 123)
+		m.state = StateSummarizing
+		m.pr = testPR()
+		m.diff = "diff content"
+		m.summary = "existing partial summary"
+
+		// Set up mock LLM provider
+		mockProvider := newMockLLMProvider([]string{"new token"}, nil)
+		m.SetLLMProvider(mockProvider)
+
+		initialGenID := m.generationID
+
+		// Try to start another summarization
+		msg := SummaryStartMsg{}
+		newModel, cmd := m.Update(msg)
+		m = newModel.(Model)
+
+		// Verify state didn't change
+		if m.state != StateSummarizing {
+			t.Errorf("expected state to remain StateSummarizing, got %s", m.state)
+		}
+
+		// Verify generation ID didn't increment
+		if m.generationID != initialGenID {
+			t.Errorf("expected generationID to remain %d, got %d", initialGenID, m.generationID)
+		}
+
+		// Verify summary wasn't cleared
+		if m.summary != "existing partial summary" {
+			t.Errorf("expected summary to remain 'existing partial summary', got %q", m.summary)
+		}
+
+		// Verify no command was returned
+		if cmd != nil {
+			t.Error("expected no command when already summarizing")
+		}
+	})
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
 

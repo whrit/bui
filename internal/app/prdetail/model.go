@@ -165,10 +165,11 @@ type Model struct {
 	err           error
 
 	// LLM streaming
-	llmCtx    context.Context
-	llmCancel context.CancelFunc
-	tokenCh   <-chan llm.Token
-	errCh     <-chan error
+	llmCtx       context.Context
+	llmCancel    context.CancelFunc
+	tokenCh      <-chan llm.Token
+	errCh        <-chan error
+	generationID int64 // Tracks the current LLM generation to detect stale messages
 
 	// Styling
 	palette ui.Palette
@@ -349,4 +350,23 @@ func (m *Model) updateViewportContent() {
 // SetLLMProvider sets the LLM provider for summary generation.
 func (m *Model) SetLLMProvider(provider llm.Provider) {
 	m.llmProvider = provider
+}
+
+// Cleanup cancels any ongoing LLM operations and clears streaming channels.
+// This should be called when navigating away from the PR detail screen to prevent
+// goroutine leaks, wasted API calls, and potential state corruption.
+func (m *Model) Cleanup() {
+	if m.llmCancel != nil {
+		m.llmCancel()
+		m.llmCancel = nil
+	}
+	m.llmCtx = nil
+	m.tokenCh = nil
+	m.errCh = nil
+}
+
+// GenerationID returns the current LLM generation ID.
+// This is useful for testing stale message detection.
+func (m Model) GenerationID() int64 {
+	return m.generationID
 }

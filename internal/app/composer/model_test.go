@@ -587,3 +587,182 @@ func TestStreamedText_ReturnsCurrentStreamedText(t *testing.T) {
 		t.Errorf("expected StreamedText() to return %q, got %q", "Hello World", m.StreamedText())
 	}
 }
+
+// =============================================================================
+// Race Condition Tests
+// =============================================================================
+
+func TestReadNextToken_PrioritizesErrors(t *testing.T) {
+	cfg := testConfig()
+	provider := newMockProvider([]string{}, nil)
+
+	m := New(cfg, provider, testPrompt(), nil, nil)
+	m.SetSize(80, 24)
+
+	// Create channels for testing
+	tokenCh := make(chan llm.Token, 1)
+	errCh := make(chan error, 1)
+	m.tokenCh = tokenCh
+	m.errCh = errCh
+
+	// Send an error first
+	testErr := errors.New("test error")
+	errCh <- testErr
+
+	// Create the readNextToken command and execute it
+	cmd := m.readNextToken()
+	msg := cmd()
+
+	// Should get error message, not done message
+	errMsg, ok := msg.(GenerateErrorMsg)
+	if !ok {
+		t.Fatalf("expected GenerateErrorMsg, got %T", msg)
+	}
+	if errMsg.Err != testErr {
+		t.Errorf("expected error %v, got %v", testErr, errMsg.Err)
+	}
+}
+
+func TestReadNextToken_ReturnsTokenWhenNoError(t *testing.T) {
+	cfg := testConfig()
+	provider := newMockProvider([]string{}, nil)
+
+	m := New(cfg, provider, testPrompt(), nil, nil)
+	m.SetSize(80, 24)
+
+	// Create channels for testing
+	tokenCh := make(chan llm.Token, 1)
+	errCh := make(chan error, 1)
+	m.tokenCh = tokenCh
+	m.errCh = errCh
+
+	// Send a token (no error)
+	tokenCh <- llm.Token{Text: "Hello"}
+
+	// Create the readNextToken command and execute it
+	cmd := m.readNextToken()
+	msg := cmd()
+
+	// Should get token message
+	tokenMsg, ok := msg.(GenerateTokenMsg)
+	if !ok {
+		t.Fatalf("expected GenerateTokenMsg, got %T", msg)
+	}
+	if tokenMsg.Token != "Hello" {
+		t.Errorf("expected token %q, got %q", "Hello", tokenMsg.Token)
+	}
+}
+
+func TestReadNextToken_ReturnsDoneOnClosedChannel(t *testing.T) {
+	cfg := testConfig()
+	provider := newMockProvider([]string{}, nil)
+
+	m := New(cfg, provider, testPrompt(), nil, nil)
+	m.SetSize(80, 24)
+
+	// Create channels for testing
+	tokenCh := make(chan llm.Token)
+	errCh := make(chan error, 1)
+	m.tokenCh = tokenCh
+	m.errCh = errCh
+
+	// Close the token channel to simulate completion
+	close(tokenCh)
+
+	// Create the readNextToken command and execute it
+	cmd := m.readNextToken()
+	msg := cmd()
+
+	// Should get done message
+	_, ok := msg.(GenerateDoneMsg)
+	if !ok {
+		t.Fatalf("expected GenerateDoneMsg, got %T", msg)
+	}
+}
+
+func TestReadNextToken_ConvertsDeadlineExceededToTimeout(t *testing.T) {
+	cfg := testConfig()
+	provider := newMockProvider([]string{}, nil)
+
+	m := New(cfg, provider, testPrompt(), nil, nil)
+	m.SetSize(80, 24)
+
+	// Create channels for testing
+	tokenCh := make(chan llm.Token, 1)
+	errCh := make(chan error, 1)
+	m.tokenCh = tokenCh
+	m.errCh = errCh
+
+	// Send a deadline exceeded error
+	errCh <- context.DeadlineExceeded
+
+	// Create the readNextToken command and execute it
+	cmd := m.readNextToken()
+	msg := cmd()
+
+	// Should get error message with ErrLLMTimeout
+	errMsg, ok := msg.(GenerateErrorMsg)
+	if !ok {
+		t.Fatalf("expected GenerateErrorMsg, got %T", msg)
+	}
+	if errMsg.Err != ErrLLMTimeout {
+		t.Errorf("expected ErrLLMTimeout, got %v", errMsg.Err)
+	}
+}
+
+// =============================================================================
+// Timeout Configuration Tests
+// =============================================================================
+
+func TestStartGeneration_UsesConfigTimeout(t *testing.T) {
+	cfg := testConfig()
+	cfg.LLM.Timeout = 30 // Set custom timeout
+	provider := newMockProvider([]string{"Hello"}, nil)
+
+	m := New(cfg, provider, testPrompt(), nil, nil)
+	m.SetSize(80, 24)
+
+	// Start generation
+	_ = m.startGeneration()
+
+	// Verify context was created with cancel function
+	if m.llmCancel == nil {
+		t.Error("expected llmCancel to be set")
+	}
+	if m.llmCtx == nil {
+		t.Error("expected llmCtx to be set")
+	}
+
+	// Clean up
+	m.llmCancel()
+}
+
+func TestStartGeneration_UsesDefaultTimeoutWhenNotConfigured(t *testing.T) {
+	cfg := testConfig()
+	cfg.LLM.Timeout = 0 // Not configured, should use default
+	provider := newMockProvider([]string{"Hello"}, nil)
+
+	m := New(cfg, provider, testPrompt(), nil, nil)
+	m.SetSize(80, 24)
+
+	// Start generation
+	_ = m.startGeneration()
+
+	// Verify context was created
+	if m.llmCancel == nil {
+		t.Error("expected llmCancel to be set")
+	}
+	if m.llmCtx == nil {
+		t.Error("expected llmCtx to be set")
+	}
+
+	// Clean up
+	m.llmCancel()
+}
+
+func TestErrLLMTimeout_ErrorMessage(t *testing.T) {
+	expected := "LLM generation timed out"
+	if ErrLLMTimeout.Error() != expected {
+		t.Errorf("expected error message %q, got %q", expected, ErrLLMTimeout.Error())
+	}
+}

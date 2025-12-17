@@ -8,6 +8,12 @@ import (
 	"os/exec"
 )
 
+// allowedCommands defines the set of commands that the executor is permitted to run.
+// This is a security measure to prevent arbitrary command execution.
+var allowedCommands = map[string]bool{
+	"git": true,
+}
+
 // CommandExecutor defines the interface for executing shell commands.
 // This abstraction enables dependency injection for testing.
 type CommandExecutor interface {
@@ -28,6 +34,10 @@ func NewExecutor() CommandExecutor {
 
 // Run executes the command and returns combined stdout/stderr output.
 func (e *realExecutor) Run(name string, args ...string) ([]byte, error) {
+	if !allowedCommands[name] {
+		return nil, fmt.Errorf("%w: %q", ErrCommandNotAllowed, name)
+	}
+
 	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -41,6 +51,10 @@ func (e *realExecutor) Run(name string, args ...string) ([]byte, error) {
 
 // RunInDir executes the command in the specified directory.
 func (e *realExecutor) RunInDir(dir, name string, args ...string) ([]byte, error) {
+	if !allowedCommands[name] {
+		return nil, fmt.Errorf("%w: %q", ErrCommandNotAllowed, name)
+	}
+
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()

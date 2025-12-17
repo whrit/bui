@@ -47,6 +47,23 @@ type HunkSelectionChangedMsg struct {
 	TotalHunks    int
 }
 
+// SelectedHunkContent contains the full content of a selected hunk for LLM context.
+type SelectedHunkContent struct {
+	FilePath string   // File path containing the hunk
+	HunkIdx  int      // Index of the hunk within the file
+	Header   string   // The @@ header line
+	Lines    []string // All lines in the hunk
+}
+
+// SearchMatch represents a single search match within the diff.
+type SearchMatch struct {
+	HunkIdx   int    // Index of the hunk containing the match
+	LineIdx   int    // Index of the line within the hunk
+	StartPos  int    // Start position within the line content
+	EndPos    int    // End position within the line content
+	Content   string // The matched text
+}
+
 // =============================================================================
 // File Selection Messages
 // =============================================================================

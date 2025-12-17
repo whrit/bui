@@ -499,6 +499,440 @@ func TestModel_SelectedHunks(t *testing.T) {
 	}
 }
 
+func TestModel_HunkNavigation(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.SetSize(120, 40)
+	m.files = []FileDiff{
+		{
+			NewPath: "main.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{Header: "@@ -1,5 +1,6 @@"},
+				{Header: "@@ -10,3 +11,4 @@"},
+				{Header: "@@ -20,3 +21,4 @@"},
+			},
+		},
+	}
+	m.state = StateReady
+	m.focus = FocusDiff
+
+	// Initially at hunk 0
+	if m.CurrentHunkIndex() != 0 {
+		t.Errorf("expected current hunk 0, got %d", m.CurrentHunkIndex())
+	}
+
+	// Navigate to next hunk
+	m.nextHunk()
+	if m.CurrentHunkIndex() != 1 {
+		t.Errorf("expected current hunk 1 after nextHunk, got %d", m.CurrentHunkIndex())
+	}
+
+	// Navigate to next hunk again
+	m.nextHunk()
+	if m.CurrentHunkIndex() != 2 {
+		t.Errorf("expected current hunk 2 after second nextHunk, got %d", m.CurrentHunkIndex())
+	}
+
+	// Try to go past the end (should stay at 2)
+	m.nextHunk()
+	if m.CurrentHunkIndex() != 2 {
+		t.Errorf("expected current hunk to stay at 2, got %d", m.CurrentHunkIndex())
+	}
+
+	// Navigate to previous hunk
+	m.prevHunk()
+	if m.CurrentHunkIndex() != 1 {
+		t.Errorf("expected current hunk 1 after prevHunk, got %d", m.CurrentHunkIndex())
+	}
+
+	// Navigate all the way back
+	m.prevHunk()
+	m.prevHunk()
+	if m.CurrentHunkIndex() != 0 {
+		t.Errorf("expected current hunk 0 after multiple prevHunk, got %d", m.CurrentHunkIndex())
+	}
+}
+
+func TestModel_ToggleCurrentHunkSelection(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.SetSize(120, 40)
+	m.files = []FileDiff{
+		{
+			NewPath: "main.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{Header: "@@ -1,5 +1,6 @@", Lines: []DiffLine{{Type: LineContext, Content: " test"}}},
+				{Header: "@@ -10,3 +11,4 @@", Lines: []DiffLine{{Type: LineAdded, Content: "+new"}}},
+			},
+		},
+	}
+	m.state = StateReady
+	m.focus = FocusDiff
+	m.currentHunkIndex = 0
+
+	// Initially not selected
+	if m.IsHunkSelected("main.go", 0) {
+		t.Error("expected hunk 0 to not be selected initially")
+	}
+
+	// Toggle selection
+	m, _ = m.toggleCurrentHunkSelection()
+	if !m.IsHunkSelected("main.go", 0) {
+		t.Error("expected hunk 0 to be selected after toggle")
+	}
+
+	// Navigate to hunk 1 and select
+	m.currentHunkIndex = 1
+	m, _ = m.toggleCurrentHunkSelection()
+	if !m.IsHunkSelected("main.go", 1) {
+		t.Error("expected hunk 1 to be selected")
+	}
+
+	// Verify both are selected
+	selected := m.SelectedHunks()
+	if len(selected) != 2 {
+		t.Errorf("expected 2 selected hunks, got %d", len(selected))
+	}
+
+	// Toggle hunk 0 off
+	m.currentHunkIndex = 0
+	m, _ = m.toggleCurrentHunkSelection()
+	if m.IsHunkSelected("main.go", 0) {
+		t.Error("expected hunk 0 to be deselected after second toggle")
+	}
+}
+
+func TestModel_GetSelectedHunksContent(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.files = []FileDiff{
+		{
+			NewPath: "main.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{
+					Header: "@@ -1,5 +1,6 @@",
+					Lines: []DiffLine{
+						{Type: LineContext, Content: " package main"},
+						{Type: LineAdded, Content: "+// comment"},
+					},
+				},
+			},
+		},
+	}
+
+	// Select the hunk
+	m.toggleHunkSelection("main.go", 0)
+
+	content := m.GetSelectedHunksContent()
+	if len(content) != 1 {
+		t.Fatalf("expected 1 selected hunk content, got %d", len(content))
+	}
+
+	hunk := content[0]
+	if hunk.FilePath != "main.go" {
+		t.Errorf("expected FilePath 'main.go', got %q", hunk.FilePath)
+	}
+	if hunk.Header != "@@ -1,5 +1,6 @@" {
+		t.Errorf("expected Header '@@ -1,5 +1,6 @@', got %q", hunk.Header)
+	}
+	if len(hunk.Lines) != 2 {
+		t.Errorf("expected 2 lines, got %d", len(hunk.Lines))
+	}
+}
+
+func TestModel_TotalHunksInCurrentFile(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.files = []FileDiff{
+		{
+			NewPath: "main.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{Header: "@@ -1,5 +1,6 @@"},
+				{Header: "@@ -10,3 +11,4 @@"},
+				{Header: "@@ -20,3 +21,4 @@"},
+			},
+		},
+	}
+	m.selectedFile = 0
+
+	total := m.TotalHunksInCurrentFile()
+	if total != 3 {
+		t.Errorf("expected 3 hunks, got %d", total)
+	}
+}
+
+func TestModel_HunkSelectionResetOnFileChange(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.SetSize(120, 40)
+	m.files = []FileDiff{
+		{
+			NewPath: "file1.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{Header: "@@ -1,5 +1,6 @@"},
+				{Header: "@@ -10,3 +11,4 @@"},
+			},
+		},
+		{
+			NewPath: "file2.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{Header: "@@ -1,5 +1,6 @@"},
+			},
+		},
+	}
+	m.state = StateReady
+	m.updateFileList()
+
+	// Navigate to hunk 1 in first file
+	m.currentHunkIndex = 1
+	if m.CurrentHunkIndex() != 1 {
+		t.Errorf("expected current hunk 1, got %d", m.CurrentHunkIndex())
+	}
+
+	// Select file 2
+	m.selectFileByIndex(1)
+
+	// Hunk index should reset to 0
+	if m.CurrentHunkIndex() != 0 {
+		t.Errorf("expected hunk index to reset to 0 after file change, got %d", m.CurrentHunkIndex())
+	}
+}
+
+// =============================================================================
+// Search Tests
+// =============================================================================
+
+func TestModel_FindMatches(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.files = []FileDiff{
+		{
+			NewPath: "main.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{
+					Header: "@@ -1,5 +1,6 @@",
+					Lines: []DiffLine{
+						{Type: LineContext, Content: " package main"},
+						{Type: LineAdded, Content: "+// This is a comment"},
+						{Type: LineRemoved, Content: "-// Old comment"},
+						{Type: LineContext, Content: " func main() {}"},
+					},
+				},
+				{
+					Header: "@@ -10,3 +11,4 @@",
+					Lines: []DiffLine{
+						{Type: LineContext, Content: " // Another comment"},
+						{Type: LineAdded, Content: "+fmt.Println(\"hello\")"},
+					},
+				},
+			},
+		},
+	}
+	m.selectedFile = 0
+
+	// Search for "comment" - should find 3 matches
+	matches := m.findMatches("comment")
+	if len(matches) != 3 {
+		t.Errorf("expected 3 matches for 'comment', got %d", len(matches))
+	}
+
+	// Search for "main" - should find 2 matches (package main and func main)
+	matches = m.findMatches("main")
+	if len(matches) != 2 {
+		t.Errorf("expected 2 matches for 'main', got %d", len(matches))
+	}
+
+	// Search for something not there
+	matches = m.findMatches("notfound")
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches for 'notfound', got %d", len(matches))
+	}
+
+	// Case-insensitive search
+	matches = m.findMatches("COMMENT")
+	if len(matches) != 3 {
+		t.Errorf("expected 3 matches for case-insensitive 'COMMENT', got %d", len(matches))
+	}
+}
+
+func TestModel_SearchNavigation(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.SetSize(120, 40)
+	m.files = []FileDiff{
+		{
+			NewPath: "main.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{
+					Header: "@@ -1,5 +1,6 @@",
+					Lines: []DiffLine{
+						{Type: LineContext, Content: " test line 1"},
+						{Type: LineAdded, Content: "+test line 2"},
+					},
+				},
+				{
+					Header: "@@ -10,3 +11,4 @@",
+					Lines: []DiffLine{
+						{Type: LineContext, Content: " test line 3"},
+					},
+				},
+			},
+		},
+	}
+	m.state = StateReady
+	m.selectedFile = 0
+
+	// Execute search
+	m.searchQuery = "test"
+	m.executeSearch()
+
+	if len(m.searchMatches) != 3 {
+		t.Fatalf("expected 3 matches, got %d", len(m.searchMatches))
+	}
+
+	// Should be at first match
+	if m.currentMatchIndex != 0 {
+		t.Errorf("expected currentMatchIndex 0, got %d", m.currentMatchIndex)
+	}
+
+	// Navigate to next match
+	m.nextMatch()
+	if m.currentMatchIndex != 1 {
+		t.Errorf("expected currentMatchIndex 1 after nextMatch, got %d", m.currentMatchIndex)
+	}
+
+	// Navigate to next match
+	m.nextMatch()
+	if m.currentMatchIndex != 2 {
+		t.Errorf("expected currentMatchIndex 2 after second nextMatch, got %d", m.currentMatchIndex)
+	}
+
+	// Wrap around to first match
+	m.nextMatch()
+	if m.currentMatchIndex != 0 {
+		t.Errorf("expected currentMatchIndex 0 after wrap around, got %d", m.currentMatchIndex)
+	}
+
+	// Navigate backwards
+	m.prevMatch()
+	if m.currentMatchIndex != 2 {
+		t.Errorf("expected currentMatchIndex 2 after prevMatch wrap, got %d", m.currentMatchIndex)
+	}
+}
+
+func TestModel_ClearSearch(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.SetSize(120, 40)
+	m.files = []FileDiff{
+		{
+			NewPath: "main.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{
+					Header: "@@ -1,5 +1,6 @@",
+					Lines:  []DiffLine{{Type: LineContext, Content: " test"}},
+				},
+			},
+		},
+	}
+	m.state = StateReady
+	m.selectedFile = 0
+
+	// Set up search state
+	m.searchMode = true
+	m.searchQuery = "test"
+	m.searchMatches = m.findMatches("test")
+	m.currentMatchIndex = 0
+
+	// Clear search
+	m.clearSearch()
+
+	if m.searchMode {
+		t.Error("expected searchMode to be false after clear")
+	}
+	if m.searchQuery != "" {
+		t.Errorf("expected searchQuery to be empty, got %q", m.searchQuery)
+	}
+	if len(m.searchMatches) != 0 {
+		t.Errorf("expected searchMatches to be empty, got %d", len(m.searchMatches))
+	}
+}
+
+func TestModel_SearchAccessors(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.files = []FileDiff{
+		{
+			NewPath: "main.go",
+			Status:  "modified",
+			Hunks: []Hunk{
+				{
+					Header: "@@ -1,5 +1,6 @@",
+					Lines:  []DiffLine{{Type: LineContext, Content: " test1 test2 test3"}},
+				},
+			},
+		},
+	}
+	m.selectedFile = 0
+
+	// Initially no search
+	if m.IsSearchMode() {
+		t.Error("expected IsSearchMode to be false initially")
+	}
+	if m.SearchQuery() != "" {
+		t.Error("expected SearchQuery to be empty initially")
+	}
+	if m.SearchMatchCount() != 0 {
+		t.Error("expected SearchMatchCount to be 0 initially")
+	}
+
+	// Activate search
+	m.searchMode = true
+	m.searchQuery = "test"
+	m.searchMatches = m.findMatches("test")
+
+	if !m.IsSearchMode() {
+		t.Error("expected IsSearchMode to be true")
+	}
+	if m.SearchQuery() != "test" {
+		t.Errorf("expected SearchQuery 'test', got %q", m.SearchQuery())
+	}
+	if m.SearchMatchCount() != 3 {
+		t.Errorf("expected SearchMatchCount 3, got %d", m.SearchMatchCount())
+	}
+	if m.CurrentMatchDisplay() != 1 {
+		t.Errorf("expected CurrentMatchDisplay 1, got %d", m.CurrentMatchDisplay())
+	}
+}
+
+func TestModel_SearchBinaryFile(t *testing.T) {
+	cfg := testConfig()
+	m := New(cfg, 1)
+	m.files = []FileDiff{
+		{
+			NewPath:  "image.png",
+			Status:   "added",
+			IsBinary: true,
+		},
+	}
+	m.selectedFile = 0
+
+	// Search should return no matches for binary files
+	matches := m.findMatches("test")
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches for binary file, got %d", len(matches))
+	}
+}
+
 // =============================================================================
 // View Tests
 // =============================================================================

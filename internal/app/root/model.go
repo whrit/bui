@@ -182,6 +182,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Global help handler - open help from any screen (except help itself)
 		if msg.String() == m.cfg.Keys.Help && m.screen != ScreenHelp {
+			// Cleanup prdetail if we're navigating away from it
+			if m.screen == ScreenPRDetail {
+				m.prdetail.Cleanup()
+			}
 			m.previousScreen = m.screen
 			m.screen = ScreenHelp
 			m.help = help.New(m.cfg, screenToHelpContext(m.previousScreen))
@@ -255,11 +259,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ==========================================================================
 
 	case prdetail.BackToDashboardMsg:
+		// Cleanup is already called by prdetail before sending this message,
+		// but we call it here as a safety net in case of direct navigation
+		m.prdetail.Cleanup()
 		m.screen = ScreenDashboard
 		// Dashboard maintains its state; no need to reinitialize
 		return m, nil
 
 	case prdetail.ViewDiffMsg:
+		// Cleanup is already called by prdetail before sending this message,
+		// but we call it here as a safety net in case of direct navigation
+		m.prdetail.Cleanup()
 		m.screen = ScreenDiffView
 		m.diffview = diffview.New(m.cfg, msg.PRNumber)
 		m.diffview.SetSize(m.width, m.height)
@@ -312,6 +322,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ==========================================================================
 
 	case prdetail.StartReviewMsg:
+		// Cleanup is already called by prdetail before sending this message,
+		// but we call it here as a safety net in case of direct navigation
+		m.prdetail.Cleanup()
 		// Navigate to review screen
 		m.screen = ScreenReview
 		m.review = review.New(m.cfg, m.ghClient, m.llmProvider, msg.PRNumber, msg.PRTitle, msg.Diff)
