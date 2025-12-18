@@ -11,6 +11,13 @@ import (
 )
 
 func main() {
+	// Load environment variables from .env files (if present)
+	// Priority: .env.local > .env
+	// Existing env vars are NOT overwritten
+	if err := config.LoadEnvFromWorkingDir(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: failed to load .env:", err)
+	}
+
 	cfg, cfgPath, err := config.LoadOrInit()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
