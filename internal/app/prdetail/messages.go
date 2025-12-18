@@ -4,8 +4,11 @@
 package prdetail
 
 import (
+	"fmt"
+	"net/url"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"bui/internal/gh"
 
@@ -185,17 +188,48 @@ func closePR(client *gh.Client, number int) tea.Cmd {
 	}
 }
 
+// BrowserErrorMsg is sent when opening the browser fails.
+type BrowserErrorMsg struct {
+	Err error
+}
+
+// validateURL checks that the URL is safe to open in a browser.
+// Only allows HTTP and HTTPS schemes to prevent security issues.
+func validateURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("unsupported URL scheme %q: only http and https are allowed", parsed.Scheme)
+	}
+
+	if parsed.Host == "" {
+		return fmt.Errorf("invalid URL: missing host")
+	}
+
+	return nil
+}
+
 // openBrowser creates a command that opens a URL in the system browser.
-func openBrowser(url string) tea.Cmd {
+// Only HTTP and HTTPS URLs are allowed for security.
+func openBrowser(urlStr string) tea.Cmd {
 	return func() tea.Msg {
+		// Validate URL before opening
+		if err := validateURL(urlStr); err != nil {
+			return BrowserErrorMsg{Err: err}
+		}
+
 		var cmd *exec.Cmd
 		switch runtime.GOOS {
 		case "darwin":
-			cmd = exec.Command("open", url)
+			cmd = exec.Command("open", urlStr)
 		case "windows":
-			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", urlStr)
 		default: // linux, bsd, etc.
-			cmd = exec.Command("xdg-open", url)
+			cmd = exec.Command("xdg-open", urlStr)
 		}
 		_ = cmd.Start()
 		return nil

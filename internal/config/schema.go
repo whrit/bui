@@ -1,5 +1,67 @@
 package config
 
+import (
+	"fmt"
+	"strings"
+)
+
+// Valid theme options
+var validThemes = map[string]bool{
+	"dark":  true,
+	"light": true,
+}
+
+// Valid LLM provider options
+var validProviders = map[string]bool{
+	"":          true, // disabled
+	"openai":    true,
+	"anthropic": true,
+	"local":     true,
+}
+
+// Validate checks that config values are within acceptable ranges.
+// Returns an error if any value is invalid.
+func (c Config) Validate() error {
+	// Validate theme
+	theme := strings.ToLower(c.UI.Theme)
+	if !validThemes[theme] {
+		return fmt.Errorf("invalid ui.theme %q: must be 'dark' or 'light'", c.UI.Theme)
+	}
+
+	// Validate LLM provider
+	provider := strings.ToLower(c.LLM.Provider)
+	if !validProviders[provider] {
+		return fmt.Errorf("invalid llm.provider %q: must be 'openai', 'anthropic', 'local', or empty", c.LLM.Provider)
+	}
+
+	// Validate MaxTokens
+	if c.LLM.MaxTokens < 0 {
+		return fmt.Errorf("invalid llm.max_tokens %d: must be non-negative", c.LLM.MaxTokens)
+	}
+
+	// Validate Temperature (typical range 0.0 to 2.0)
+	if c.LLM.Temperature < 0 || c.LLM.Temperature > 2 {
+		return fmt.Errorf("invalid llm.temperature %.2f: must be between 0.0 and 2.0", c.LLM.Temperature)
+	}
+
+	// Validate Timeout
+	if c.LLM.Timeout < 0 {
+		return fmt.Errorf("invalid llm.timeout %d: must be non-negative", c.LLM.Timeout)
+	}
+
+	// Validate MaxDiffLines
+	if c.LLM.Privacy.MaxDiffLines < 0 {
+		return fmt.Errorf("invalid llm.privacy.max_diff_lines %d: must be non-negative", c.LLM.Privacy.MaxDiffLines)
+	}
+
+	// Validate local provider has base URL
+	if provider == "local" && c.LLM.Local.BaseURL == "" {
+		return fmt.Errorf("llm.local.base_url is required when llm.provider is 'local'")
+	}
+
+	return nil
+}
+
 type Config struct {
 	UI       UIConfig       `toml:"ui"`
 	Keys     KeysConfig     `toml:"keys"`

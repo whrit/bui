@@ -2,6 +2,7 @@ package createpr
 
 import (
 	"context"
+	"strings"
 
 	"bui/internal/config"
 	"bui/internal/gh"
@@ -550,7 +551,7 @@ func (m Model) buildCommitLog() string {
 		return "No commits found"
 	}
 
-	var result string
+	var result strings.Builder
 	count := len(m.commits)
 	if count > maxCommitsToShow {
 		count = maxCommitsToShow
@@ -558,12 +559,24 @@ func (m Model) buildCommitLog() string {
 
 	for i := 0; i < count; i++ {
 		c := m.commits[i]
-		result += "- " + c.Subject + "\n"
+		result.WriteString("- ")
+		result.WriteString(c.Subject)
+		result.WriteString("\n")
 	}
 
 	if len(m.commits) > maxCommitsToShow {
-		result += "... and more commits\n"
+		result.WriteString("... and more commits\n")
 	}
 
-	return result
+	return result.String()
+}
+
+// Cleanup cancels any ongoing LLM operations and clears streaming channels.
+// This should be called when navigating away from the create PR screen to prevent
+// goroutine leaks, wasted API calls, and potential state corruption.
+func (m *Model) Cleanup() {
+	m.cancelGeneration()
+	m.llmCtx = nil
+	m.tokenCh = nil
+	m.errCh = nil
 }

@@ -5,6 +5,7 @@ package root
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -141,7 +142,12 @@ func New(cfg config.Config, cfgPath string) Model {
 	// Initialize LLM provider if configured
 	var llmProvider llm.Provider
 	if cfg.LLM.Provider != "" {
-		llmProvider, _ = llm.NewProvider(cfg)
+		var err error
+		llmProvider, err = llm.NewProvider(cfg)
+		if err != nil {
+			// Log the error - LLM features will be disabled but app continues
+			fmt.Fprintf(os.Stderr, "Warning: Failed to initialize LLM provider: %v\n", err)
+		}
 	}
 
 	return Model{
@@ -182,9 +188,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Global help handler - open help from any screen (except help itself)
 		if msg.String() == m.cfg.Keys.Help && m.screen != ScreenHelp {
-			// Cleanup prdetail if we're navigating away from it
-			if m.screen == ScreenPRDetail {
+			// Cleanup LLM operations before navigating to help
+			switch m.screen {
+			case ScreenPRDetail:
 				m.prdetail.Cleanup()
+			case ScreenCreatePR:
+				m.createpr.Cleanup()
+			case ScreenReview:
+				m.review.Cleanup()
 			}
 			m.previousScreen = m.screen
 			m.screen = ScreenHelp
@@ -298,11 +309,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ==========================================================================
 
 	case createpr.BackToDashboardMsg:
+		// Cleanup any LLM operations before navigating away
+		m.createpr.Cleanup()
 		m.screen = ScreenDashboard
 		// Dashboard maintains its state; no need to reinitialize
 		return m, nil
 
 	case createpr.PRCreatedMsg:
+		// Cleanup any LLM operations (should be done already, but safety net)
+		m.createpr.Cleanup()
 		// Navigate to PR detail for the newly created PR
 		m.screen = ScreenPRDetail
 		m.prdetail = prdetail.New(m.cfg, msg.PR.Number)
@@ -336,11 +351,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ==========================================================================
 
 	case review.BackToPRDetailMsg:
+		// Cleanup any LLM operations before navigating away
+		m.review.Cleanup()
 		m.screen = ScreenPRDetail
 		// PR detail should still have the PR loaded, so just switch back
 		return m, nil
 
 	case review.ReviewSubmittedMsg:
+		// Cleanup any LLM operations (should be done already, but safety net)
+		m.review.Cleanup()
 		// Navigate back to PR detail and refresh
 		m.screen = ScreenPRDetail
 		// Reinitialize to refresh the PR data after review submission

@@ -306,3 +306,13 @@ func (m *Model) cancelGeneration() {
 	}
 	m.state = StateEditing
 }
+
+// Cleanup cancels any ongoing LLM operations and clears streaming channels.
+// This should be called when navigating away from the composer screen to prevent
+// goroutine leaks, wasted API calls, and potential state corruption.
+func (m *Model) Cleanup() {
+	m.cancelGeneration()
+	m.llmCtx = nil
+	m.tokenCh = nil
+	m.errCh = nil
+}

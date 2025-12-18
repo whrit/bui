@@ -24,13 +24,17 @@ type Provider struct {
 	client      *http.Client
 }
 
+// defaultHTTPTimeout is the timeout for establishing HTTP connections.
+// The streaming response timeout is controlled by context cancellation.
+const defaultHTTPTimeout = 30 * time.Second
+
 func New(cfg config.Config) *Provider {
 	return &Provider{
 		baseURL:     strings.TrimRight(cfg.LLM.Local.BaseURL, "/"),
 		model:       cfg.LLM.Model,
 		maxTokens:   cfg.LLM.MaxTokens,
 		temperature: cfg.LLM.Temperature,
-		client:      &http.Client{Timeout: 0},
+		client:      &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
@@ -65,7 +69,7 @@ func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Toke
 		// Local models often don't have a separate system field, so we prepend it.
 		combined := pr.System + "\n\n" + pr.User
 
-		b, _ := json.Marshal(reqBody{
+		b, err := json.Marshal(reqBody{
 			Model:  p.model,
 			Prompt: combined,
 			Stream: true,
@@ -73,6 +77,10 @@ func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Toke
 				"temperature": firstNonZeroFloat(pr.Temperature, p.temperature),
 			},
 		})
+		if err != nil {
+			errCh <- fmt.Errorf("failed to marshal request: %w", err)
+			return
+		}
 
 		url := p.baseURL + "/api/generate"
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))

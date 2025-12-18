@@ -474,3 +474,13 @@ type noGHClientError struct{}
 func (e *noGHClientError) Error() string {
 	return "no GitHub client configured"
 }
+
+// Cleanup cancels any ongoing LLM operations and clears streaming channels.
+// This should be called when navigating away from the review screen to prevent
+// goroutine leaks, wasted API calls, and potential state corruption.
+func (m *Model) Cleanup() {
+	m.cancelGeneration()
+	m.llmCtx = nil
+	m.tokenCh = nil
+	m.errCh = nil
+}

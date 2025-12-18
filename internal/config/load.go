@@ -12,6 +12,10 @@ import (
 const (
 	appName  = "bui"
 	fileName = "config.toml"
+
+	// configFileMode restricts config file to owner read/write only since
+	// the config may contain sensitive settings or API key references.
+	configFileMode = 0o600
 )
 
 // LoadOrInit loads config from the standard config path.
@@ -31,7 +35,7 @@ func LoadOrInit() (Config, string, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return Config{}, "", fmt.Errorf("mkdir config dir: %w", err)
 		}
-		f, err := os.Create(path)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, configFileMode)
 		if err != nil {
 			return Config{}, "", fmt.Errorf("create config: %w", err)
 		}
@@ -49,5 +53,11 @@ func LoadOrInit() (Config, string, error) {
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return Config{}, "", fmt.Errorf("decode config: %w", err)
 	}
+
+	// Validate config values
+	if err := cfg.Validate(); err != nil {
+		return Config{}, "", fmt.Errorf("validate config: %w", err)
+	}
+
 	return cfg, path, nil
 }

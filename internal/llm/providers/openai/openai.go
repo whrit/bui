@@ -22,13 +22,17 @@ type Provider struct {
 	client      *http.Client
 }
 
+// defaultHTTPTimeout is the timeout for establishing HTTP connections.
+// The streaming response timeout is controlled by context cancellation.
+const defaultHTTPTimeout = 30 * time.Second
+
 func New(cfg config.Config) *Provider {
 	return &Provider{
 		apiKey:      os.Getenv("OPENAI_API_KEY"),
 		model:       cfg.LLM.Model,
 		maxTokens:   cfg.LLM.MaxTokens,
 		temperature: cfg.LLM.Temperature,
-		client:      &http.Client{Timeout: 0}, // streaming request controls timeout
+		client:      &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
@@ -68,7 +72,7 @@ func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Toke
 			return
 		}
 
-		body, _ := json.Marshal(chatReq{
+		body, err := json.Marshal(chatReq{
 			Model:  p.model,
 			Stream: true,
 			Messages: []msg{
@@ -78,6 +82,10 @@ func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Toke
 			MaxTokens:   firstNonZero(pr.MaxTokens, p.maxTokens),
 			Temperature: firstNonZeroFloat(pr.Temperature, p.temperature),
 		})
+		if err != nil {
+			errCh <- fmt.Errorf("failed to marshal request: %w", err)
+			return
+		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
 		if err != nil {
