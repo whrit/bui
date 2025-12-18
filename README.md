@@ -9,13 +9,34 @@ A terminal-native GitHub Pull Request manager with **built-in LLM copilot**, **s
 - **Diff Viewer** - Syntax-highlighted diffs with file tree navigation, hunk selection, and search
 - **Create PR** - Guided wizard with LLM-powered title/description generation
 - **Review** - Submit approvals, request changes, or comments with AI assistance
-- **LLM Integration** - OpenAI, Anthropic, or local (Ollama) providers for AI-assisted workflows
+- **LLM Integration** - Access 300+ models via OpenRouter (OpenAI, Anthropic, Llama, Mistral, etc.) or local (Ollama)
 
 ## Requirements
 
 - **Go 1.22+**
-- **GitHub CLI (`gh`)** - installed and authenticated (`gh auth login`)
+- **GitHub CLI (`gh`)** - installed and authenticated
 - **Git** - for repository operations
+
+## GitHub Authentication
+
+bui uses the [GitHub CLI](https://cli.github.com/) for all GitHub operations. The CLI handles OAuth authentication securely:
+
+```bash
+# Install GitHub CLI (if not installed)
+# macOS: brew install gh
+# Linux: https://github.com/cli/cli/blob/trunk/docs/install_linux.md
+# Windows: winget install GitHub.cli
+
+# Authenticate with GitHub (one-time setup)
+gh auth login
+```
+
+The CLI will guide you through the OAuth flow:
+1. Choose GitHub.com or GitHub Enterprise
+2. Select HTTPS or SSH for git operations
+3. Authenticate via browser (recommended) or paste a token
+
+Your credentials are stored securely by the GitHub CLI - bui never handles tokens directly.
 
 ## Installation
 
@@ -50,28 +71,56 @@ On first run, bui will create a configuration file at:
 
 ## LLM Setup
 
-bui supports three LLM providers for AI-assisted features:
+bui uses [OpenRouter](https://openrouter.ai) to provide access to 300+ AI models through a single API key.
 
-### OpenAI (Default)
+### Quick Setup
 
-```bash
-export OPENAI_API_KEY="your-api-key"
-```
+1. **Get an API key** at [openrouter.ai/keys](https://openrouter.ai/keys)
 
-### Anthropic
+2. **Create a `.env` file** in your project directory:
+   ```bash
+   cp .env.example .env
+   ```
 
-```bash
-export ANTHROPIC_API_KEY="your-api-key"
-```
+3. **Add your API key:**
+   ```bash
+   # .env
+   OPENROUTER_API_KEY=sk-or-your-api-key-here
+   ```
 
-Then update your config:
+That's it! bui will automatically load the `.env` file on startup.
+
+### Environment Files
+
+bui supports multiple `.env` files with the following priority:
+- `.env.local` - Personal overrides (highest priority)
+- `.env` - Base configuration
+
+**Note:** Existing environment variables are never overwritten by `.env` files.
+
+### Available Models
+
+OpenRouter provides access to models from multiple providers:
+
+| Provider | Example Models |
+|----------|----------------|
+| Anthropic | `anthropic/claude-3-5-sonnet`, `anthropic/claude-3-opus` |
+| OpenAI | `openai/gpt-4o`, `openai/gpt-4-turbo` |
+| Meta | `meta-llama/llama-3.1-70b-instruct` |
+| Mistral | `mistralai/mistral-large` |
+| Google | `google/gemini-pro-1.5` |
+
+See [openrouter.ai/models](https://openrouter.ai/models) for the full list.
+
+To change models, update your config:
 ```toml
 [llm]
-provider = "anthropic"
-model = "claude-3-sonnet-20240229"
+model = "openai/gpt-4o"  # or any OpenRouter model
 ```
 
 ### Local (Ollama)
+
+For offline/local models using Ollama:
 
 1. Install [Ollama](https://ollama.ai)
 2. Pull a model: `ollama pull mistral`
@@ -193,10 +242,10 @@ confirm = "enter"
 # LLM Configuration
 # =============================================================================
 [llm]
-provider = "openai"         # openai, anthropic, or local
-model = "gpt-4.1-mini"      # Model name
+provider = "openrouter"     # openrouter or local
+model = "anthropic/claude-3-5-sonnet"  # OpenRouter model (provider/model format)
 max_tokens = 800            # Max response tokens
-temperature = 0.2           # Response randomness (0.0-1.0)
+temperature = 0.2           # Response randomness (0.0-2.0)
 stream = true               # Stream responses
 timeout = 60                # Timeout in seconds
 
@@ -204,6 +253,12 @@ timeout = 60                # Timeout in seconds
 [llm.privacy]
 send_full_diff = false      # Send complete diff to LLM
 max_diff_lines = 300        # Truncate diffs to N lines
+
+# OpenRouter settings (optional)
+[llm.openrouter]
+# base_url = "https://openrouter.ai/api/v1"  # Override API endpoint
+site_url = ""               # Your app URL (for OpenRouter rankings)
+site_name = "bui"           # Your app name (for OpenRouter rankings)
 
 # Local LLM (Ollama) settings
 [llm.local]
@@ -275,7 +330,7 @@ bui/
 │   ├── gh/               # GitHub CLI wrapper
 │   ├── git/              # Git operations
 │   ├── llm/              # LLM provider abstraction
-│   │   ├── providers/    # OpenAI, Anthropic, Local
+│   │   ├── providers/    # OpenRouter, Local (Ollama)
 │   │   └── prompts/      # Prompt templates
 │   ├── syntax/           # Diff syntax highlighting
 │   ├── config/           # TOML configuration
@@ -313,10 +368,15 @@ Run `gh auth login` and follow the prompts.
 Make sure you're running bui from within a git repository that has a GitHub remote.
 
 ### LLM not responding
-- Check your API key is set correctly
-- Verify network connectivity
+- Check your `OPENROUTER_API_KEY` is set in `.env` or environment
+- Verify network connectivity to openrouter.ai
 - Check the timeout setting in config (default: 60s)
-- For local providers, ensure Ollama is running
+- For local providers, ensure Ollama is running (`ollama serve`)
+
+### ".env file not loading"
+- Ensure `.env` is in your current working directory
+- Check file permissions (should be readable)
+- Verify the format: `KEY=value` (no spaces around `=`)
 
 ### Colors look wrong
 - Try a different terminal emulator
