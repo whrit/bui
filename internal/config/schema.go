@@ -13,10 +13,9 @@ var validThemes = map[string]bool{
 
 // Valid LLM provider options
 var validProviders = map[string]bool{
-	"":          true, // disabled
-	"openai":    true,
-	"anthropic": true,
-	"local":     true,
+	"":           true, // disabled
+	"openrouter": true,
+	"local":      true,
 }
 
 // Validate checks that config values are within acceptable ranges.
@@ -31,7 +30,7 @@ func (c Config) Validate() error {
 	// Validate LLM provider
 	provider := strings.ToLower(c.LLM.Provider)
 	if !validProviders[provider] {
-		return fmt.Errorf("invalid llm.provider %q: must be 'openai', 'anthropic', 'local', or empty", c.LLM.Provider)
+		return fmt.Errorf("invalid llm.provider %q: must be 'openrouter', 'local', or empty", c.LLM.Provider)
 	}
 
 	// Validate MaxTokens
@@ -71,10 +70,10 @@ type Config struct {
 }
 
 type UIConfig struct {
-	Theme          string `toml:"theme"`         // dark | light
-	Accent         string `toml:"accent"`        // indigo | blue | ...
-	SyntaxTheme    string `toml:"syntax_theme"`  // github-dark | github | dracula | ...
-	ShowLineNumbers bool  `toml:"show_line_numbers"`
+	Theme           string `toml:"theme"`        // dark | light
+	Accent          string `toml:"accent"`       // indigo | blue | ...
+	SyntaxTheme     string `toml:"syntax_theme"` // github-dark | github | dracula | ...
+	ShowLineNumbers bool   `toml:"show_line_numbers"`
 }
 
 type KeysConfig struct {
@@ -84,15 +83,16 @@ type KeysConfig struct {
 }
 
 type LLMConfig struct {
-	Provider    string  `toml:"provider"` // openai | anthropic | local
+	Provider    string  `toml:"provider"` // openrouter | local
 	Model       string  `toml:"model"`
 	MaxTokens   int     `toml:"max_tokens"`
 	Temperature float64 `toml:"temperature"`
 	Stream      bool    `toml:"stream"`
 	Timeout     int     `toml:"timeout"` // Timeout in seconds for LLM generation (default: 60)
 
-	Privacy LLMPrivacyConfig `toml:"privacy"`
-	Local   LocalLLMConfig   `toml:"local"`
+	Privacy    LLMPrivacyConfig `toml:"privacy"`
+	Local      LocalLLMConfig   `toml:"local"`
+	OpenRouter OpenRouterConfig `toml:"openrouter"`
 }
 
 type LLMPrivacyConfig struct {
@@ -102,6 +102,12 @@ type LLMPrivacyConfig struct {
 
 type LocalLLMConfig struct {
 	BaseURL string `toml:"base_url"` // e.g. http://localhost:11434
+}
+
+type OpenRouterConfig struct {
+	BaseURL  string `toml:"base_url"`  // Optional: override API endpoint (default: https://openrouter.ai/api/v1)
+	SiteURL  string `toml:"site_url"`  // Optional: your app URL for OpenRouter rankings
+	SiteName string `toml:"site_name"` // Optional: your app name for OpenRouter rankings
 }
 
 type GitConfig struct {

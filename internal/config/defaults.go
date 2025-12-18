@@ -3,9 +3,9 @@ package config
 func Default() Config {
 	return Config{
 		UI: UIConfig{
-			Theme:          "dark",
-			Accent:         "indigo",
-			SyntaxTheme:    "github-dark",
+			Theme:           "dark",
+			Accent:          "indigo",
+			SyntaxTheme:     "github-dark",
 			ShowLineNumbers: true,
 		},
 		Keys: KeysConfig{
@@ -14,17 +14,23 @@ func Default() Config {
 			Confirm: "enter",
 		},
 		LLM: LLMConfig{
-			Provider:    "openai",
-			Model:       "gpt-4.1-mini",
+			Provider:    "openrouter",
+			Model:       "anthropic/claude-3-5-sonnet",
 			MaxTokens:   800,
 			Temperature: 0.2,
 			Stream:      true,
+			Timeout:     60,
 			Privacy: LLMPrivacyConfig{
 				SendFullDiff: false,
 				MaxDiffLines: 300,
 			},
 			Local: LocalLLMConfig{
 				BaseURL: "http://localhost:11434",
+			},
+			OpenRouter: OpenRouterConfig{
+				// BaseURL defaults to https://openrouter.ai/api/v1
+				SiteURL:  "",
+				SiteName: "bui",
 			},
 		},
 		Git: GitConfig{

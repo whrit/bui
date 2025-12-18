@@ -1,4 +1,4 @@
-package openai
+package openrouter
 
 import (
 	"bufio"
@@ -14,29 +14,41 @@ import (
 	"bui/internal/llm/core"
 )
 
+const (
+	defaultBaseURL     = "https://openrouter.ai/api/v1"
+	defaultHTTPTimeout = 30 * time.Second
+)
+
 type Provider struct {
 	apiKey      string
 	model       string
 	maxTokens   int
 	temperature float64
+	baseURL     string
+	siteURL     string
+	siteName    string
 	client      *http.Client
 }
 
-// defaultHTTPTimeout is the timeout for establishing HTTP connections.
-// The streaming response timeout is controlled by context cancellation.
-const defaultHTTPTimeout = 30 * time.Second
-
 func New(cfg config.Config) *Provider {
+	baseURL := cfg.LLM.OpenRouter.BaseURL
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+
 	return &Provider{
-		apiKey:      os.Getenv("OPENAI_API_KEY"),
+		apiKey:      os.Getenv("OPENROUTER_API_KEY"),
 		model:       cfg.LLM.Model,
 		maxTokens:   cfg.LLM.MaxTokens,
 		temperature: cfg.LLM.Temperature,
+		baseURL:     baseURL,
+		siteURL:     cfg.LLM.OpenRouter.SiteURL,
+		siteName:    cfg.LLM.OpenRouter.SiteName,
 		client:      &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
-func (p *Provider) Name() string { return "openai" }
+func (p *Provider) Name() string { return "openrouter" }
 
 type chatReq struct {
 	Model       string  `json:"model"`
@@ -56,7 +68,14 @@ type streamChunk struct {
 		Delta struct {
 			Content string `json:"content"`
 		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Error *streamError `json:"error,omitempty"`
+}
+
+type streamError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Token, <-chan error) {
@@ -68,7 +87,7 @@ func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Toke
 		defer close(errCh)
 
 		if p.apiKey == "" {
-			errCh <- fmt.Errorf("OPENAI_API_KEY is not set")
+			errCh <- fmt.Errorf("OPENROUTER_API_KEY is not set")
 			return
 		}
 
@@ -87,13 +106,21 @@ func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Toke
 			return
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			errCh <- err
 			return
 		}
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 		req.Header.Set("Content-Type", "application/json")
+
+		// Optional headers for OpenRouter rankings
+		if p.siteURL != "" {
+			req.Header.Set("HTTP-Referer", p.siteURL)
+		}
+		if p.siteName != "" {
+			req.Header.Set("X-Title", p.siteName)
+		}
 
 		// Streaming can take time; avoid client timeout by using a transport-level approach.
 		client := *p.client
@@ -105,10 +132,11 @@ func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Toke
 			return
 		}
 		defer func() { _ = resp.Body.Close() }()
+
 		if resp.StatusCode >= 400 {
 			buf := new(bytes.Buffer)
 			_, _ = buf.ReadFrom(resp.Body)
-			errCh <- fmt.Errorf("openai http %d: %s", resp.StatusCode, buf.String())
+			errCh <- fmt.Errorf("openrouter http %d: %s", resp.StatusCode, buf.String())
 			return
 		}
 
@@ -132,6 +160,19 @@ func (p *Provider) Stream(ctx context.Context, pr core.Prompt) (<-chan core.Toke
 				// tolerate non-json noise
 				continue
 			}
+
+			// Check for mid-stream errors (OpenRouter-specific)
+			if c.Error != nil {
+				errCh <- fmt.Errorf("openrouter stream error: %s", c.Error.Message)
+				return
+			}
+
+			// Check for error finish reason
+			if len(c.Choices) > 0 && c.Choices[0].FinishReason == "error" {
+				errCh <- fmt.Errorf("openrouter stream terminated with error")
+				return
+			}
+
 			if len(c.Choices) == 0 {
 				continue
 			}
